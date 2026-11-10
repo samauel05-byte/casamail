@@ -35,6 +35,27 @@ check("no tiene Node.js expuesto a la página (aislamiento)", await win.evaluate
 check("candado del planificador tomado por la app", fs.existsSync(path.join(HOME, "scheduler.lock")));
 
 await app.evaluate(({ shell }) => { (globalThis as unknown as { opened: string[] }).opened = []; shell.openExternal = async (u: string) => { (globalThis as unknown as { opened: string[] }).opened.push(u); }; });
+// Registro de errores: archivo local con datos sensibles ocultos
+const logFile = path.join(HOME, "logs", "casamail.log"), appVersion = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")).version as string;
+const logText = () => (fs.existsSync(logFile) ? fs.readFileSync(logFile, "utf8") : "");
+check(`el registro existe y anota el inicio con las versiones (CasaMail ${appVersion})`, logText().includes("Inicio |") && logText().includes(`CasaMail ${appVersion}`) && logText().includes("Servidor local en"));
+await win.evaluate(() => console.error("fallo-de-prueba clave sk-abcdefghijklmnopqrstuvwxyz enlace /?t=" + "c".repeat(48)));
+await win.evaluate(async () => { await fetch("/api/archive/import-path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path: "secreto-relativo.pst" }) }); });
+await new Promise((r) => setTimeout(r, 600));
+check("un error de la interfaz queda registrado, con la clave y el token ocultos", logText().includes("[interfaz]") && logText().includes("fallo-de-prueba") && !logText().includes("sk-abcdefghij") && !logText().includes("c".repeat(48)));
+check("un error de la API queda registrado (ruta y motivo, sin el cuerpo de la petición)", logText().includes("[api] POST /api/archive/import-path") && logText().includes("ruta completa") && !logText().includes("secreto-relativo"));
+await app.evaluate(({ dialog }) => { (globalThis as unknown as { errBox: string[] }).errBox = []; dialog.showErrorBox = ((t: string, c: string) => { (globalThis as unknown as { errBox: string[] }).errBox.push(t, c); }) as never; process.emit("uncaughtException" as never, new Error("boom-de-prueba") as never); });
+await new Promise((r) => setTimeout(r, 300));
+const errBox = await app.evaluate(() => (globalThis as unknown as { errBox: string[] }).errBox);
+check("una excepción inesperada se registra y avisa mostrando dónde está el registro", logText().includes("uncaughtException") && logText().includes("boom-de-prueba") && errBox[1].includes("casamail.log"));
+check("los volcados de fallos nativos se guardan en este equipo (no se envían)", (await app.evaluate(({ app: a }) => a.getPath("crashDumps"))) === path.join(HOME, "logs", "crashes"));
+const ayuda = await app.evaluate(({ Menu }) => Menu.getApplicationMenu()!.items.find((i) => i.label === "Ayuda")?.submenu?.items.map((i) => i.label).filter(Boolean));
+check("menú Ayuda: abrir registros, copiar diagnóstico y acerca de", JSON.stringify(ayuda) === JSON.stringify(["Abrir carpeta de registros", "Copiar información de diagnóstico", "Acerca de CasaMail"]));
+await app.evaluate(({ shell, Menu }) => { (globalThis as unknown as { opened2: string }).opened2 = ""; shell.openPath = (async (p: string) => { (globalThis as unknown as { opened2: string }).opened2 = p; return ""; }) as never; Menu.getApplicationMenu()!.items.find((i) => i.label === "Ayuda")!.submenu!.items[0].click(); });
+check("'Abrir carpeta de registros' abre la carpeta correcta", (await app.evaluate(() => (globalThis as unknown as { opened2: string }).opened2)) === path.join(HOME, "logs"));
+const clip = await app.evaluate(({ Menu, clipboard }) => { Menu.getApplicationMenu()!.items.find((i) => i.label === "Ayuda")!.submenu!.items[1].click(); return clipboard.readText(); });
+check("'Copiar información de diagnóstico' deja en el portapapeles versiones, sistema y últimas líneas", clip.includes(`CasaMail ${appVersion}`) && clip.includes("Electron") && clip.includes("últimas líneas") && !clip.includes("c".repeat(48)));
+
 // Archivo local: selector nativo -> token de un solo uso -> importación SIN copiar el archivo
 const bridge = await win.evaluate(() => Object.keys((window as unknown as { casamailDesktop?: object }).casamailDesktop ?? {}).sort());
 check("el puente seguro solo expone los dos selectores nativos", JSON.stringify(bridge) === JSON.stringify(["pickFolder", "pickImportFile"]));

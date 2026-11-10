@@ -4,13 +4,35 @@
  * Arranca el servidor local de CasaMail dentro de la app y lo muestra en una ventana propia.
  * Los datos siguen en ~/.casamail (compartidos con la línea de comandos y el servidor MCP).
  */
-const { app, BrowserWindow, Tray, Menu, shell, nativeImage, Notification, session, dialog, ipcMain, powerSaveBlocker } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, nativeImage, Notification, session, dialog, ipcMain, powerSaveBlocker, clipboard, crashReporter } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { pathToFileURL } = require('node:url');
 
 app.setAppUserModelId('app.casamail.desktop');
+
+// ---------- registro de errores (archivo local; nunca se envía; claves y rutas personales ocultas) ----------
+const log = require('./log.cjs');
+for (const lvl of ['log', 'info', 'warn', 'error']) { // todo lo que escriba la app o su servidor interno también va al registro
+  const orig = console[lvl].bind(console);
+  console[lvl] = (...a) => { try { orig(...a); } catch { /* sin consola (app instalada) */ } log.write(lvl === 'log' ? 'info' : lvl, ...a); };
+}
+app.setPath('crashDumps', path.join(log.dir, 'crashes'));
+crashReporter.start({ uploadToServer: false, compress: true }); // los volcados de fallos nativos se quedan en este equipo
+process.on('uncaughtException', (e) => {
+  log.error('uncaughtException', (e && e.stack) || e);
+  if (app.isReady()) dialog.showErrorBox('Error inesperado en CasaMail', `${(e && e.message) || e}\n\nDetalles en el registro:\n${log.file}`);
+});
+process.on('unhandledRejection', (e) => log.error('unhandledRejection', (e && e.stack) || e));
+app.on('child-process-gone', (_e, d) => log.error('child-process-gone', JSON.stringify(d)));
+const versionInfo = () => `CasaMail ${app.getVersion()} | Electron ${process.versions.electron} | Chrome ${process.versions.chrome} | Node ${process.versions.node} | ${process.platform} ${process.arch} ${os.release()} | RAM ${Math.round(os.totalmem() / 2 ** 30)} GB | idioma ${app.getLocale()}`;
+const openLogs = () => { try { fs.mkdirSync(log.dir, { recursive: true }); } catch { /* ya existe */ } shell.openPath(log.dir); };
+const copyDiagnostics = () => {
+  clipboard.writeText(log.diagnostics(versionInfo()));
+  if (Notification.isSupported()) new Notification({ title: 'Información copiada', body: 'Ya está en el portapapeles: pégala donde te pidan ayuda.' }).show();
+};
+const showAbout = () => dialog.showMessageBox({ type: 'info', title: 'Acerca de CasaMail', message: `CasaMail ${app.getVersion()}`, detail: `${versionInfo()}\n\nTus correos se quedan en este equipo. El registro de errores es un archivo local: no se envía a ningún sitio.` });
 
 /** Selectores nativos: el usuario elige el archivo (p. ej. un PST de 50 GB) y la app lo lee SIN copiarlo. */
 function trustedSender(e) { try { return !!srv && e.senderFrame.url.startsWith(srv.origin); } catch { return false; } }
@@ -73,6 +95,14 @@ function createWindow() {
   });
   win.once('ready-to-show', () => win && win.show());
   win.loadURL(srv.url);
+  const wc = win.webContents;
+  wc.on('render-process-gone', (_e, d) => log.error('render-process-gone', JSON.stringify(d)));
+  wc.on('unresponsive', () => log.warn('La ventana no responde'));
+  wc.on('did-fail-load', (_e, code, desc, url, isMain) => { if (isMain) log.error('did-fail-load', code, desc, url); });
+  wc.on('console-message', (...args) => { // la firma cambia entre versiones de Electron: se aceptan ambas
+    const d = args[0] && typeof args[0] === 'object' && 'message' in args[0] ? args[0] : { level: args[1], message: args[2], lineNumber: args[3], sourceId: args[4] };
+    if (d.level === 3 || d.level === 'error') log.error('[interfaz]', d.message, d.sourceId ? `(${d.sourceId}:${d.lineNumber})` : '');
+  });
   // El inicio de sesión de Google/Microsoft debe hacerse en el navegador del sistema (bloquean los navegadores embebidos).
   win.webContents.setWindowOpenHandler(({ url }) => { openExternal(url); return { action: 'deny' }; });
   win.webContents.on('will-navigate', (e, url) => { if (!url.startsWith(srv.origin)) { e.preventDefault(); openExternal(url); } });
@@ -89,7 +119,7 @@ function trayMenu() {
   if (process.platform !== 'linux') {
     items.push({ label: 'Iniciar con el sistema', type: 'checkbox', checked: app.getLoginItemSettings().openAtLogin, click: (m) => app.setLoginItemSettings({ openAtLogin: m.checked, args: ['--hidden'] }) });
   }
-  items.push({ type: 'separator' }, { label: 'Salir de CasaMail', click: () => { quitting = true; app.quit(); } });
+  items.push({ type: 'separator' }, { label: 'Abrir carpeta de registros', click: openLogs }, { type: 'separator' }, { label: 'Salir de CasaMail', click: () => { quitting = true; app.quit(); } });
   return Menu.buildFromTemplate(items);
 }
 
@@ -110,6 +140,7 @@ function appMenu() {
     { label: 'Edición', submenu: [{ role: 'undo', label: 'Deshacer' }, { role: 'redo', label: 'Rehacer' }, { type: 'separator' }, { role: 'cut', label: 'Cortar' }, { role: 'copy', label: 'Copiar' }, { role: 'paste', label: 'Pegar' }, { role: 'selectAll', label: 'Seleccionar todo' }] },
     { label: 'Ver', submenu: [{ role: 'resetZoom', label: 'Tamaño normal' }, { role: 'zoomIn', label: 'Acercar' }, { role: 'zoomOut', label: 'Alejar' }, { type: 'separator' }, { role: 'togglefullscreen', label: 'Pantalla completa' }] },
     { label: 'Ventana', submenu: [{ role: 'minimize', label: 'Minimizar' }, { role: 'close', label: 'Cerrar' }] },
+    { label: 'Ayuda', submenu: [{ label: 'Abrir carpeta de registros', click: openLogs }, { label: 'Copiar información de diagnóstico', click: copyDiagnostics }, { type: 'separator' }, { label: 'Acerca de CasaMail', click: showAbout }] },
   ]);
 }
 
@@ -132,16 +163,19 @@ if (!app.requestSingleInstanceLock()) {
   app.on('will-quit', (e) => { if (srv) { const s = srv; srv = null; e.preventDefault(); s.close().finally(() => app.quit()); } });
 
   app.whenReady().then(async () => {
+    log.info('Inicio |', versionInfo());
     session.defaultSession.setPermissionRequestHandler((_wc, _perm, cb) => cb(false));
     process.env.CASAMAIL_NO_OPEN = '1';
     try {
       const mod = await import(pathToFileURL(path.join(__dirname, '..', 'dist', 'web.js')).href);
       srv = await mod.startServer({ port: 8025, fallbackRandom: true, quiet: true });
     } catch (e) {
-      dialog.showErrorBox('CasaMail no pudo arrancar', String((e && e.message) || e));
+      log.error('No se pudo arrancar el servidor local', (e && e.stack) || e);
+      dialog.showErrorBox('CasaMail no pudo arrancar', `${String((e && e.message) || e)}\n\nDetalles en el registro:\n${log.file}`);
       quitting = true; app.quit(); return;
     }
     Menu.setApplicationMenu(appMenu());
+    log.info('Servidor local en', srv.origin);
     createTray();
     if (!process.argv.includes('--hidden')) createWindow();
   });

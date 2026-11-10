@@ -1,6 +1,6 @@
 {
   "name": "casamail",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "CasaMail: cliente de correo local con Yerleny (IA), Gmail/Outlook con OAuth y servidor MCP",
   "type": "module",
   "bin": {

@@ -55,6 +55,6 @@ Claude Desktop / Cursor / Cline:
 ```bash
 npm test                              # 84 pruebas (con LLM_DIR/PST_SAMPLE, también modelo y PST reales): IMAP/SMTP/XOAUTH2 reales de prueba, OAuth, retirada de mensajes, Yerleny
 PW_PATH=<ruta a playwright> npx tsx tests/ui.ts   # 42 comprobaciones en un navegador real
-npm run test:desktop                  # 19 comprobaciones de la app de escritorio (Electron, necesita xvfb en Linux sin pantalla)
+npm run test:desktop                  # 26 comprobaciones de la app de escritorio (Electron, necesita xvfb en Linux sin pantalla)
 ```
 Las pruebas de OAuth usan un proveedor falso local; **no se han probado contra Google o Microsoft reales** (necesitan tus credenciales). Los instaladores de Windows y macOS los genera GitHub Actions y **no se han probado aún en esos sistemas** (el empaquetado y la prueba se hicieron en Linux).

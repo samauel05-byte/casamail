@@ -483,6 +483,37 @@ if (LLM && fs.existsSync(LLM)) {
 limited.close(); badKey.close(); modelsSrv.close();
 store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });
 
+console.log("\nRegistro de errores (app de escritorio)");
+const { createRequire } = await import("node:module");
+const reqCjs = createRequire(import.meta.url);
+const logm = reqCjs("../electron/log.cjs") as { dir: string; file: string; redact(s: string): string; write(l: string, ...a: unknown[]): void; tail(n?: number): string; diagnostics(h: string): string };
+await t("registro: oculta tokens, claves, contraseñas, enlaces de acceso, emails y la carpeta personal", async () => {
+  const hex = "a".repeat(48);
+  const r = logm.redact(`GET http://127.0.0.1:8025/?t=${hex}&code=4/0AbCd&state=xyz Bearer abcdef123456789 sk-abcdefghijklmnop1234 AIzaSyA1234567890abcdefghijklmnopqrstuv {"apiKey":"secreto","accessToken":"tok123"} ana.perez@empresa.com ${os.homedir()}/.casamail/x token ${hex}`);
+  ok(!r.includes(hex) && !/code=4\/0AbCd|state=xyz|abcdef123456789|sk-abcdef|AIzaSyA|secreto|tok123|ana\.perez/.test(r), "quedó algo sensible: " + r);
+  ok(r.includes("t=[oculto]") && r.includes("Bearer [oculto]") && r.includes("a***@empresa.com") && r.includes("~/.casamail/x"), "debe conservar lo útil: " + r);
+  eq(logm.redact("Error de conexión IMAP en imap.gmail.com:993 (ECONNRESET)"), "Error de conexión IMAP en imap.gmail.com:993 (ECONNRESET)", "un mensaje normal no se altera");
+});
+await t("registro: escribe líneas con fecha y nivel, con permisos privados, y las multilínea sangradas", async () => {
+  logm.write("error", "fallo en el paso 3\nsegunda línea del error");
+  const txt = fs.readFileSync(logm.file, "utf8");
+  ok(/^\d{4}-\d\d-\d\dT[\d:.]+Z \[error\] fallo en el paso 3\n {4}segunda línea del error$/m.test(txt), txt.slice(-120));
+  if (process.platform !== "win32") eq((fs.statSync(logm.file).mode & 0o777).toString(8), "600", "solo el usuario puede leerlo");
+});
+await t("registro: rota a los 2 MB (conserva el anterior) y no crece sin límite", async () => {
+  const line = "x".repeat(1000); for (let i = 0; i < 2300; i++) logm.write("info", line);
+  ok(fs.existsSync(path.join(logm.dir, "casamail.1.log")), "debe existir el registro anterior"); ok(fs.statSync(logm.file).size < 2.2 * 1048576, "el actual no pasa de ~2 MB");
+});
+await t("registro: 'últimas líneas' y diagnóstico (ya sin datos sensibles)", async () => {
+  logm.write("warn", "marca-final-123"); ok(logm.tail(3).includes("marca-final-123") && logm.tail(3).split("\n").length <= 3, "tail");
+  const d = logm.diagnostics("CasaMail 9.9.9 | token t=" + "b".repeat(48)); ok(d.includes("CasaMail 9.9.9") && d.includes("últimas líneas") && d.includes("marca-final-123") && !d.includes("b".repeat(48)), "diagnóstico");
+});
+await t("registro: si no se puede escribir (disco/permisos), NUNCA rompe la app", async () => {
+  const prev = process.env.CASAMAIL_HOME; process.env.CASAMAIL_HOME = "/dev/null/no-se-puede";
+  try { delete reqCjs.cache[reqCjs.resolve("../electron/log.cjs")]; const bad = reqCjs("../electron/log.cjs") as typeof logm; bad.write("error", "esto no debe lanzar"); eq(bad.tail(), "(el registro está vacío)"); }
+  finally { process.env.CASAMAIL_HOME = prev; delete reqCjs.cache[reqCjs.resolve("../electron/log.cjs")]; }
+});
+
 console.log(`\n${pass} OK, ${failN} fallos`);
 imap.close?.(); smtp.close(); fakeAi.close(); mockOauth.close();
 process.exit(failN ? 1 : 0);
