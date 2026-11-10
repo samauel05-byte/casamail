@@ -115,25 +115,46 @@ export function searchContacts(q: string, limit = 8) {
 }
 
 // ---------- IA ----------
-export interface AiConfig { provider: "openai" | "anthropic"; baseUrl: string; apiKey: string; model: string; preset?: string }
-export const AI_PRESETS: Record<string, { provider: "openai" | "anthropic"; baseUrl: string; model: string; needsKey: boolean }> = {
+export type AiProvider = "openai" | "anthropic" | "local";
+export interface AiConfig { provider: AiProvider; baseUrl: string; apiKey: string; model: string; preset?: string; id?: string }
+export interface AiPreset { provider: AiProvider; baseUrl: string; model: string; needsKey: boolean; free?: boolean; signup?: string; note?: string }
+/**
+ * Proveedores. "free" = tiene capa gratuita (con límites de uso que el proveedor puede cambiar).
+ * Los modelos gratuitos cambian a menudo: la app los DETECTA en vivo en lugar de fiarse de estos valores por defecto.
+ */
+export const AI_PRESETS: Record<string, AiPreset> = {
+  local:      { provider: "local", baseUrl: "", model: "qwen2.5-1.5b", needsKey: false, free: true, note: "Motor integrado en la app: gratis, sin cuenta, sin clave y 100 % privado (funciona sin internet)." },
+  gemini:     { provider: "openai", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.0-flash", needsKey: true, free: true, signup: "https://aistudio.google.com/apikey", note: "Capa gratuita de Google AI Studio (sin tarjeta)." },
+  groq:       { provider: "openai", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", needsKey: true, free: true, signup: "https://console.groq.com/keys", note: "Capa gratuita de Groq, muy rápida." },
+  openrouter: { provider: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "google/gemma-4-31b-it:free", needsKey: true, free: true, signup: "https://openrouter.ai/keys", note: "Modelos con sufijo :free, con límites diarios." },
+  cerebras:   { provider: "openai", baseUrl: "https://api.cerebras.ai/v1", model: "llama3.1-8b", needsKey: true, free: true, signup: "https://cloud.cerebras.ai/", note: "Capa gratuita de Cerebras." },
+  ollama:     { provider: "openai", baseUrl: "http://localhost:11434/v1", model: "llama3.1", needsKey: false, free: true, note: "Ollama instalado en tu equipo (gratis y privado)." },
+  lmstudio:   { provider: "openai", baseUrl: "http://localhost:1234/v1", model: "local-model", needsKey: false, free: true },
   anthropic:  { provider: "anthropic", baseUrl: "https://api.anthropic.com", model: "claude-sonnet-5-5", needsKey: true },
   openai:     { provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini", needsKey: true },
-  gemini:     { provider: "openai", baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai", model: "gemini-2.0-flash", needsKey: true },
-  groq:       { provider: "openai", baseUrl: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile", needsKey: true },
-  openrouter: { provider: "openai", baseUrl: "https://openrouter.ai/api/v1", model: "openrouter/auto", needsKey: true },
   deepseek:   { provider: "openai", baseUrl: "https://api.deepseek.com/v1", model: "deepseek-chat", needsKey: true },
   mistral:    { provider: "openai", baseUrl: "https://api.mistral.ai/v1", model: "mistral-small-latest", needsKey: true },
-  ollama:     { provider: "openai", baseUrl: "http://localhost:11434/v1", model: "llama3.1", needsKey: false },
-  lmstudio:   { provider: "openai", baseUrl: "http://localhost:1234/v1", model: "local-model", needsKey: false },
   custom:     { provider: "openai", baseUrl: "", model: "", needsKey: false },
 };
-export function getAiConfig(): AiConfig | null {
-  const c = readJson<AiConfig | null>("ai.json", null);
-  if (process.env.CASAMAIL_AI_KEY && c) c.apiKey = process.env.CASAMAIL_AI_KEY;
-  return c && c.baseUrl && c.model ? c : null;
+export const aiValid = (c: Partial<AiConfig> | null | undefined): c is AiConfig => !!c && !!c.provider && !!c.model && (c.provider === "local" || !!c.baseUrl);
+const newEngineId = () => "e" + Math.random().toString(36).slice(2, 9);
+
+/** Motores de IA en orden de uso: si uno falla (límite gratuito agotado, sin red…), Yerleny prueba el siguiente. */
+export function getAiEngines(): AiConfig[] {
+  const raw = readJson<{ engines?: AiConfig[] } & Partial<AiConfig> | null>("ai.json", null);
+  if (!raw) return [];
+  const list = Array.isArray(raw.engines) ? raw.engines : [raw as AiConfig]; // formato anterior: un solo motor
+  const engines = list.filter(aiValid).map((e) => ({ ...e, id: e.id ?? newEngineId() }));
+  if (process.env.CASAMAIL_AI_KEY && engines[0]) engines[0].apiKey = process.env.CASAMAIL_AI_KEY;
+  return engines;
 }
-export const saveAiConfig = (c: AiConfig) => writeJson("ai.json", c);
+export const saveAiEngines = (list: AiConfig[]) => writeJson("ai.json", { engines: list.filter(aiValid).map((e) => ({ ...e, id: e.id ?? newEngineId() })) });
+export const getAiConfig = (): AiConfig | null => getAiEngines()[0] ?? null;
+/** Define el motor principal (los de respaldo se conservan). */
+export function saveAiConfig(c: AiConfig) {
+  const rest = getAiEngines().slice(1);
+  saveAiEngines([{ ...c, id: c.id ?? getAiEngines()[0]?.id }, ...rest]);
+}
 
 // ---------- credenciales de la app OAuth (Client ID que registra el usuario) ----------
 export interface OAuthClients { google?: { clientId: string; clientSecret?: string }; microsoft?: { clientId: string; clientSecret?: string; tenant?: string } }
