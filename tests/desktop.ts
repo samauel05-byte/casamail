@@ -59,6 +59,18 @@ if (process.env.PST_SAMPLE && fs.existsSync(process.env.PST_SAMPLE)) {
   check("PST/OST real importado desde la app de escritorio (13 correos)", r2.job.state === "done" && r2.job.added === 13);
 }
 
+// Motor de IA integrado dentro de Electron (necesita el modelo ya descargado: LLM_DIR=/carpeta/con/el/modelo)
+if (process.env.LLM_DIR && fs.existsSync(process.env.LLM_DIR)) {
+  const mdir = path.join(HOME, "models"); fs.mkdirSync(mdir, { recursive: true });
+  const gguf = fs.readdirSync(process.env.LLM_DIR).find((x) => /1\.5b.*\.gguf$/.test(x))!; fs.symlinkSync(path.join(process.env.LLM_DIR, gguf), path.join(mdir, gguf));
+  fs.writeFileSync(path.join(mdir, "qwen2.5-1.5b.json"), JSON.stringify({ path: path.join(mdir, gguf), files: [path.join(mdir, gguf)], size: 1, at: Date.now() }));
+  store.saveAiEngines([{ provider: "local", baseUrl: "", apiKey: "", model: "qwen2.5-1.5b", preset: "local" }]);
+  const st = await win.evaluate(async () => (await fetch("/api/ai/local")).json()) as { available: boolean; models: { id: string; ready: boolean }[] };
+  check("el motor integrado está disponible dentro de la app instalada (librería nativa cargada)", st.available && st.models.find((m) => m.id === "qwen2.5-1.5b")!.ready);
+  const t0 = Date.now(); const r = await win.evaluate(async () => (await fetch("/api/ai/test", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })).json()) as { reply?: string; error?: string };
+  check(`el motor integrado responde dentro de Electron (${((Date.now() - t0) / 1000).toFixed(1)} s)`, r.reply === "OK");
+}
+
 // OAuth: la autorización de Google se abre en el navegador del sistema y la conexión se completa en la app
 await win.click("#cfg"); await win.click('[data-add="google"]'); await win.waitForSelector("#ocid");
 await win.fill("#ocid", "mock-client"); await win.fill("#ocs", "shh");

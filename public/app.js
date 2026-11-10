@@ -483,42 +483,121 @@ function oauthConnect(provider, hint) {
 }
 
 async function tabIA(c) {
-  const [pr, cfg, yer] = await Promise.all([api('/api/ai/presets'), api('/api/ai/config').catch(() => null), api('/api/yerleny')]); S.yer = yer;
-  const labels = { anthropic: 'Anthropic (Claude)', openai: 'OpenAI', gemini: 'Google Gemini', groq: 'Groq', openrouter: 'OpenRouter', deepseek: 'DeepSeek', mistral: 'Mistral', ollama: 'Ollama (local, gratis)', lmstudio: 'LM Studio (local)', custom: 'Otro (compatible con OpenAI)' };
+  const [pr, eng0, yer, loc0] = await Promise.all([api('/api/ai/presets'), api('/api/ai/engines').catch(() => []), api('/api/yerleny'), api('/api/ai/local').catch(() => null)]);
+  S.yer = yer; let engines = eng0, loc = loc0, chosen = null;
+  const labels = { local: 'Integrado en la app', gemini: 'Google Gemini', groq: 'Groq', openrouter: 'OpenRouter', cerebras: 'Cerebras', ollama: 'Ollama (tu equipo)', lmstudio: 'LM Studio (tu equipo)', anthropic: 'Anthropic (Claude)', openai: 'OpenAI', deepseek: 'DeepSeek', mistral: 'Mistral', custom: 'Otro (compatible con OpenAI)' };
   const tones = [['', 'Neutro'], ['profesional y cercano', 'Profesional y cercano'], ['formal', 'Formal'], ['cercano y amable', 'Cercano y amable'], ['breve y directo', 'Breve y directo'], ['cercano y con humor', 'Cercano y con humor']];
   const notes = n => n.length ? n.map((t, i) => `<div class="out-row" style="padding:8px 12px"><span class="grow">${esc(t)}</span><button class="iconbtn sm" data-rn="${i}" aria-label="Olvidar" title="Olvidar">${I('x', 'sm')}</button></div>`).join('') : '<p class="mut">Aún no recuerda nada. Dile “recuerda que firmo como…” en el chat, o añade una nota aquí.</p>';
-  c.innerHTML = `<div class="yhero">${YL('lg')}<div><h3>Yerleny</h3><p class="lead" style="margin:2px 0 0">La IA de CasaMail: resume, redacta, busca y ordena tu bandeja. Piensa con el modelo que le conectes aquí y recuerda cómo te gusta escribir.</p></div></div>
-    <h4>Su cerebro (modelo de IA)</h4>
-    <div class="note warn">${I('shield')}<span>El contenido de los correos que uses con Yerleny se envía al proveedor del modelo. Con <b>Ollama</b> o <b>LM Studio</b> todo se queda en tu equipo.</span></div>
-    <label class="lb">Proveedor</label><select id="ap" class="field" style="height:auto;border-radius:10px">${Object.keys(pr).map(k => `<option value="${k}" ${cfg?.preset === k ? 'selected' : ''}>${labels[k] || k}</option>`).join('')}</select>
-    <label class="lb">URL base de la API</label><input id="au" class="field" value="${esc(cfg?.baseUrl || '')}" spellcheck="false">
-    <label class="lb">Modelo</label><input id="am" class="field" list="ml" value="${esc(cfg?.model || '')}" spellcheck="false"><datalist id="ml"></datalist>
-    <label class="lb">API key ${cfg?.hasKey ? '(guardada; déjala igual para conservarla)' : ''}</label><input id="ak" class="field" type="password" value="${esc(cfg?.apiKey || '')}" placeholder="sk-…" autocomplete="off">
-    <div class="row" style="margin-top:16px"><button class="btn btn-primary" id="as">Guardar</button><button class="btn" id="at">Probar conexión</button><button class="btn" id="ad" hidden>Detectar Ollama</button><span id="ast" class="mut"></span></div>
+  const nameOf = e => (labels[e.preset] || e.preset || e.provider) + ' · ' + (e.provider === 'local' ? (loc?.models.find(m => m.id === e.model)?.label || e.model) : e.model);
+  const isFree = e => e.provider === 'local' || pr[e.preset]?.free;
+
+  c.innerHTML = `<div class="yhero">${YL('lg')}<div><h3>Yerleny</h3><p class="lead" style="margin:2px 0 0">La IA de CasaMail: resume, redacta, busca y ordena tu bandeja. Piensa con el motor que le conectes y recuerda cómo te gusta escribir.</p></div></div>
+    <h4>Motores (en orden de uso)</h4>
+    <p class="mut small" style="margin-top:0">Yerleny usa el primero. Si falla (límite gratuito agotado, sin internet, clave inválida…), <b>prueba el siguiente automáticamente</b>.</p>
+    <div id="englist"></div>
+    <h4>Añadir un motor gratuito</h4>
+    <div class="note ok-note">${I('lock')}<span><b>Integrado</b> = sin cuenta, sin clave, sin internet y tus correos no salen del equipo. <b>En la nube</b> = más potente y rápido, pero necesita una clave gratuita y el contenido de los correos que uses con Yerleny viaja a ese proveedor.</span></div>
+    <div class="tiers" id="localbox"></div>
+    <div class="row" id="cloudchips" style="margin-top:14px"><b class="small" style="margin-right:4px">En la nube (capa gratuita):</b>${['gemini', 'groq', 'openrouter', 'cerebras'].map(k => `<button class="btn btn-sm" data-cloud="${k}">${labels[k]}</button>`).join('')}</div>
+    <div id="cloudpane"></div>
+    <details class="adv" style="margin-top:18px"><summary>Avanzado: Claude, OpenAI, Ollama, LM Studio u otro compatible</summary>
+      <div class="note warn" style="margin-top:12px">${I('shield')}<span>El contenido de los correos que uses con Yerleny se envía al proveedor del motor. Con <b>Ollama</b> o <b>LM Studio</b> todo se queda en tu equipo.</span></div>
+      <label class="lb">Proveedor</label><select id="ap" class="field" style="height:auto;border-radius:10px">${Object.keys(pr).map(k => `<option value="${k}" ${engines[0]?.preset === k ? 'selected' : ''}>${labels[k] || k}</option>`).join('')}</select>
+      <label class="lb">URL base de la API</label><input id="au" class="field" value="${esc(engines[0]?.baseUrl || '')}" spellcheck="false">
+      <label class="lb">Modelo</label><input id="am" class="field" list="ml" value="${esc(engines[0]?.model || '')}" spellcheck="false"><datalist id="ml"></datalist>
+      <label class="lb">API key ${engines[0]?.hasKey ? '(guardada; déjala igual para conservarla)' : ''}</label><input id="ak" class="field" type="password" value="${esc(engines[0]?.apiKey || '')}" placeholder="sk-…" autocomplete="off">
+      <div class="row" style="margin-top:16px"><button class="btn btn-primary" id="as">Guardar como motor principal</button><button class="btn" id="aa">Añadir como respaldo</button><button class="btn" id="at">Probar conexión</button><button class="btn" id="ad" hidden>Detectar Ollama</button><span id="ast" class="mut"></span></div>
+    </details>
     <h4>Personalidad y memoria</h4>
     <div class="grid2"><div><label class="lb" style="margin-top:0">¿Cómo te llamas?</label><input id="yn" class="field" value="${esc(yer.userName || '')}" placeholder="Tu nombre"></div><div><label class="lb" style="margin-top:0">Idioma habitual</label><input id="yl" class="field" value="${esc(yer.language || '')}" placeholder="Español"></div></div>
     <label class="lb">Tu estilo al escribir</label><select id="yt" class="field" style="height:auto;border-radius:10px;max-width:340px">${tones.map(([v, l]) => `<option value="${esc(v)}" ${v === (yer.tone || '') ? 'selected' : ''}>${l}</option>`).join('')}</select>
     <div class="row"><button class="btn btn-primary" id="ys">Guardar preferencias</button><span id="yst" class="mut"></span></div>
     <label class="lb" style="margin-top:20px">Lo que Yerleny recuerda de ti</label><div id="ynotes">${notes(yer.notes)}</div>
     <div class="row"><input id="yni" class="field" style="flex:1" placeholder="Ej.: Firmo como Sam · Mi jefa es Marta Ruiz" maxlength="300"><button class="btn" id="yna">Recordar</button></div>`;
-  const local = () => ['ollama', 'lmstudio'].includes($('#ap').value);
+
+  // ---- lista de motores ----
+  const saveEngines = async list => { engines = await api('/api/ai/engines', { engines: list }); S.aiOk = engines.length > 0; drawEngines(); };
+  const drawEngines = () => {
+    $('#englist').innerHTML = engines.length ? engines.map((e, i) => `<div class="acct-row"><span class="avatar sm" style="background:${e.provider === 'local' ? 'var(--ok)' : 'var(--brand)'}">${i + 1}</span><div class="grow"><b>${esc(nameOf(e))}</b><span class="mut">${i === 0 ? 'Principal' : 'Respaldo'}${isFree(e) ? ' · <span class="ok">Gratis</span>' : ''}${e.provider === 'local' ? ' · en tu equipo' : ''}</span><span class="small" id="et-${esc(e.id)}"></span></div>
+      <button class="iconbtn sm" data-up="${i}" aria-label="Subir" title="Subir" ${i === 0 ? 'disabled' : ''}>${I('back', 'sm').replace('<svg', '<svg style="transform:rotate(90deg)"')}</button><button class="iconbtn sm" data-down="${i}" aria-label="Bajar" title="Bajar" ${i === engines.length - 1 ? 'disabled' : ''}>${I('back', 'sm').replace('<svg', '<svg style="transform:rotate(-90deg)"')}</button>
+      <button class="btn btn-sm" data-test="${esc(e.id)}">Probar</button><button class="btn btn-ghost btn-sm" data-rm="${esc(e.id)}">Quitar</button></div>`).join('')
+      : `<div class="note warn">${I('sparkles')}<span>Yerleny todavía no tiene motor. Elige uno gratuito aquí abajo: el <b>integrado</b> no necesita cuenta.</span></div>`;
+    $$('#englist [data-up]').forEach(b => b.onclick = () => { const i = +b.dataset.up, l = engines.map(e => ({ ...e })); [l[i - 1], l[i]] = [l[i], l[i - 1]]; saveEngines(l); });
+    $$('#englist [data-down]').forEach(b => b.onclick = () => { const i = +b.dataset.down, l = engines.map(e => ({ ...e })); [l[i + 1], l[i]] = [l[i], l[i + 1]]; saveEngines(l); });
+    $$('#englist [data-rm]').forEach(b => b.onclick = () => saveEngines(engines.filter(e => e.id !== b.dataset.rm)));
+    $$('#englist [data-test]').forEach(b => b.onclick = async () => { const el = $('#et-' + b.dataset.test); el.innerHTML = ' · probando…'; try { const r = await api('/api/ai/test', { engineId: b.dataset.test }); el.innerHTML = ` · <span class="ok">funciona ✔ (${esc(r.reply)})</span>`; } catch (x) { el.innerHTML = ` · <span class="err">${esc(x.message)}</span>`; } });
+    drawLocal();
+  };
+  const addEngine = async e => { await saveEngines([...engines.map(x => ({ ...x })), e]); };
+
+  // ---- motor integrado ----
+  let localTimer = null;
+  const drawLocal = () => {
+    const box = $('#localbox'); if (!box) return;
+    if (!loc) { box.innerHTML = ''; return; }
+    if (!loc.available) { box.innerHTML = `<div class="note warn">${I('shield')}<span>El motor integrado no está disponible en este sistema. Usa una opción en la nube o instala Ollama. <span class="mut">(${esc(loc.error)})</span></span></div>`; return; }
+    const d = loc.download;
+    box.innerHTML = loc.models.map(m => {
+      const using = engines.some(e => e.provider === 'local' && e.model === m.id), dling = d.state === 'downloading' && d.id === m.id, p = d.total ? Math.min(1, d.downloaded / d.total) : 0;
+      return `<div class="tier ${m.id === loc.recommended ? 'rec' : ''}"><b>${esc(m.label)}</b><div class="row" style="margin:5px 0 0">${m.id === loc.recommended ? '<span class="badge ai">Recomendado para tu equipo</span>' : ''}<span class="badge">${(m.bytes / 1e9).toFixed(1)} GB</span>${m.id === 'qwen2.5-7b' && !loc.gpu ? '<span class="badge">Lento sin tarjeta gráfica</span>' : ''}</div>
+        <p class="mut small" style="margin:6px 0">${esc(m.blurb)}${m.fits ? '' : ` <span class="err">Tu equipo tiene ${loc.ramGB} GB de RAM: puede ir justo.</span>`}</p>
+        ${dling ? `<div class="pbar"><i style="width:${Math.round(p * 100)}%"></i></div><div class="mut small">Descargando… ${fmtSize(d.downloaded)} de ${fmtSize(d.total)} (${Math.round(p * 100)}%) <button class="btn btn-ghost btn-sm" data-lcancel="1">Cancelar</button></div>`
+          : using ? `<div class="ok small"><b>En uso ✔</b></div>`
+          : m.ready ? `<div class="row" style="margin:0"><button class="btn btn-primary btn-sm" data-luse="${m.id}">Usar este motor</button><button class="btn btn-ghost btn-sm" data-ldel="${m.id}">Borrar del disco</button></div>`
+          : `<button class="btn btn-primary btn-sm" data-ldl="${m.id}" ${d.state === 'downloading' ? 'disabled' : ''}>${I('download', 'sm')} Descargar (${(m.bytes / 1e9).toFixed(1)} GB, una sola vez)</button>`}
+        ${d.state === 'error' && d.id === m.id ? `<div class="err small">${esc(d.error || 'Error en la descarga')}</div>` : ''}</div>`;
+    }).join('') + `<p class="mut small" style="grid-column:1/-1;margin:0">Modelos abiertos con licencia Apache-2.0. Se guardan en <code>${esc(loc.dir)}</code>. El motor integrado es más limitado que Claude, GPT o Gemini: va muy bien para resumir, traducir y reescribir; para el asistente con herramientas, el modelo <b>potente</b> o uno en la nube es más fiable. En equipos sin tarjeta gráfica el modelo potente es lento.</p>`;
+    $$('[data-ldl]').forEach(b => b.onclick = async () => { try { loc.download = await api('/api/ai/local/download', { id: b.dataset.ldl }); drawLocal(); watchLocal(); } catch (e) { toast(e.message, { kind: 'bad' }); } });
+    $$('[data-lcancel]').forEach(b => b.onclick = async () => { loc.download = await api('/api/ai/local/cancel', {}); drawLocal(); });
+    $$('[data-luse]').forEach(b => b.onclick = () => addEngine({ provider: 'local', baseUrl: '', apiKey: '', model: b.dataset.luse, preset: 'local' }).then(() => toast('Yerleny ya piensa en tu equipo')));
+    $$('[data-ldel]').forEach(b => b.onclick = async () => { if (!confirm('¿Borrar el modelo del disco? Podrás volver a descargarlo.')) return; await api('/api/ai/local/' + b.dataset.ldel, undefined, 'DELETE'); await saveEngines(engines.filter(e => !(e.provider === 'local' && e.model === b.dataset.ldel))); loc = await api('/api/ai/local'); drawLocal(); });
+  };
+  const watchLocal = () => { clearInterval(localTimer); localTimer = setInterval(async () => { if ($('#modal').hidden || !$('#localbox')) return clearInterval(localTimer); try { loc = await api('/api/ai/local'); drawLocal(); if (loc.download.state !== 'downloading') { clearInterval(localTimer); if (loc.download.state === 'done') toast('Modelo descargado: ya puedes usarlo'); } } catch { /* sin servidor */ } }, 1000); };
+
+  // ---- nube con capa gratuita ----
+  $$('[data-cloud]').forEach(b => b.onclick = async () => {
+    const k = b.dataset.cloud, p = pr[k]; chosen = k;
+    $('#cloudpane').innerHTML = `<div class="pane-add"><div class="row" style="margin:0"><b style="font-size:16px">${labels[k]}</b><span class="badge ai">Capa gratuita</span></div><p class="mut small" style="margin:6px 0 0">${esc(p.note || '')} Los límites de uso gratis los fija el proveedor y pueden cambiar.</p>
+      <ol class="steps"><li><span>Abre <a href="${esc(p.signup)}" target="_blank" rel="noopener">${esc(p.signup.replace(/^https:\/\//, ''))}</a> e inicia sesión.</span></li><li><span>Crea una clave de API (gratis; normalmente sin tarjeta).</span></li><li><span>Pégala aquí:</span></li></ol>
+      <input id="ck" class="field" type="password" placeholder="Pega tu clave de API" autocomplete="off" spellcheck="false">
+      <div class="row"><button class="btn" id="cdet">Detectar modelos disponibles</button><select id="cmod" class="field" style="width:auto;max-width:100%"><option value="${esc(p.model)}">${esc(p.model)}</option></select></div>
+      <div class="row"><button class="btn btn-primary" id="cadd">Probar y añadir</button><span id="cst" class="mut"></span></div></div>`;
+    $('#cdet').onclick = async () => {
+      $('#cst').textContent = 'Buscando modelos…';
+      try { const r = await api('/api/ai/models', { preset: k, apiKey: $('#ck').value }); const best = r.models.find(m => m.free && m.tools !== false) || r.models.find(m => m.id === p.model) || r.models[0];
+        $('#cmod').innerHTML = r.models.map(m => `<option value="${esc(m.id)}" ${m.id === best?.id ? 'selected' : ''}>${esc(m.id)}${m.free ? ' · gratis' : ''}${m.tools === false ? ' · sin herramientas' : ''}</option>`).join(''); $('#cst').innerHTML = `<span class="ok">${r.models.length} modelos</span>`; }
+      catch (e) { $('#cst').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    };
+    $('#cadd').onclick = async e => {
+      const eng = { provider: p.provider, baseUrl: p.baseUrl, apiKey: $('#ck').value.trim(), model: $('#cmod').value, preset: k };
+      if (!eng.apiKey) { $('#cst').innerHTML = '<span class="err">Pega primero tu clave.</span>'; return; }
+      busy(e.currentTarget, true); $('#cst').textContent = 'Probando…';
+      try { const t = await api('/api/ai/test', { engine: eng }); await addEngine(eng); $('#cloudpane').innerHTML = `<div class="note ok-note">${I('check')}<span><b>${esc(labels[k])}</b> conectado ✔ (respondió “${esc(t.reply)}”). Ya está en la lista de motores.</span></div>`; }
+      catch (x) { $('#cst').innerHTML = `<span class="err">${esc(x.message)}</span>`; busy($('#cadd'), false); }
+    };
+  });
+
+  // ---- avanzado ----
   const fill = () => { const q = pr[$('#ap').value]; if (!q) return; $('#au').value = q.baseUrl; $('#am').value = q.model; $('#ak').placeholder = q.needsKey ? 'sk-…' : 'No hace falta en local'; $('#ad').hidden = $('#ap').value !== 'ollama'; };
-  if (!cfg) fill(); $('#ad').hidden = $('#ap').value !== 'ollama'; $('#ap').onchange = fill;
-  const save = async () => { await api('/api/ai/config', { provider: pr[$('#ap').value].provider, baseUrl: $('#au').value, model: $('#am').value, apiKey: $('#ak').value, preset: $('#ap').value }); S.aiOk = true; };
-  $('#as').onclick = async () => { try { await save(); $('#ast').innerHTML = '<span class="ok">Guardado ✔</span>'; } catch (x) { $('#ast').innerHTML = `<span class="err">${esc(x.message)}</span>`; } };
-  $('#at').onclick = async () => { $('#ast').textContent = 'Probando…'; try { await save(); const r = await api('/api/ai/test', {}); $('#ast').innerHTML = `<span class="ok">Yerleny conectada ✔ (${esc(r.reply)})</span>`; } catch (x) { $('#ast').innerHTML = `<span class="err">${esc(x.message)}</span>`; } };
+  if (!engines[0] || engines[0].provider === 'local') fill(); $('#ad').hidden = $('#ap').value !== 'ollama'; $('#ap').onchange = fill;
+  const form = () => ({ provider: pr[$('#ap').value].provider, baseUrl: $('#au').value, model: $('#am').value, apiKey: $('#ak').value, preset: $('#ap').value });
+  $('#as').onclick = async () => { try { await api('/api/ai/config', form()); engines = await api('/api/ai/engines'); S.aiOk = true; drawEngines(); $('#ast').innerHTML = '<span class="ok">Guardado ✔</span>'; } catch (x) { $('#ast').innerHTML = `<span class="err">${esc(x.message)}</span>`; } };
+  $('#aa').onclick = async () => { try { await addEngine({ ...form() }); $('#ast').innerHTML = '<span class="ok">Añadido como respaldo ✔</span>'; } catch (x) { $('#ast').innerHTML = `<span class="err">${esc(x.message)}</span>`; } };
+  $('#at').onclick = async () => { $('#ast').textContent = 'Probando…'; try { const r = await api('/api/ai/test', { engine: form() }); $('#ast').innerHTML = `<span class="ok">Funciona ✔ (${esc(r.reply)})</span>`; } catch (x) { $('#ast').innerHTML = `<span class="err">${esc(x.message)}</span>`; } };
   $('#ad').onclick = async () => {
     $('#ast').textContent = 'Buscando Ollama…'; const r = await api('/api/ai/ollama');
     if (!r.running) { $('#ast').innerHTML = '<span class="err">No encontré Ollama. Instálalo desde ollama.com y ejecuta <code>ollama pull llama3.1</code>.</span>'; return; }
     $('#ml').innerHTML = r.models.map(m => `<option value="${esc(m)}">`).join(''); if (r.models.length && !r.models.includes($('#am').value)) $('#am').value = r.models[0];
     $('#ast').innerHTML = `<span class="ok">Ollama detectado: ${r.models.length} modelo${r.models.length === 1 ? '' : 's'}.</span>`;
   };
+
+  // ---- personalidad y memoria ----
   $('#ys').onclick = async () => { try { S.yer = await api('/api/yerleny', { userName: $('#yn').value, language: $('#yl').value, tone: $('#yt').value }); $('#yst').innerHTML = '<span class="ok">Guardado ✔</span>'; $('#chat').innerHTML = ''; } catch (x) { $('#yst').innerHTML = `<span class="err">${esc(x.message)}</span>`; } };
   const redraw = y => { S.yer = y; $('#ynotes').innerHTML = notes(y.notes); bindNotes(); };
-  const bindNotes = () => $$('[data-rn]').forEach(b => b.onclick = async () => redraw(await api('/api/yerleny/notes/' + b.dataset.rn, undefined, 'DELETE')));
+  const bindNotes = () => $$('#ynotes [data-rn]').forEach(b => b.onclick = async () => redraw(await api('/api/yerleny/notes/' + b.dataset.rn, undefined, 'DELETE')));
   $('#yna').onclick = async () => { const t = $('#yni').value.trim(); if (!t) return; redraw(await api('/api/yerleny/notes', { note: t })); $('#yni').value = ''; };
   $('#yni').onkeydown = e => { if (e.key === 'Enter') $('#yna').click(); };
-  bindNotes(); void local;
+  bindNotes(); drawEngines(); if (loc?.download?.state === 'downloading') watchLocal();
 }
 async function tabFirma(c) {
   const a = await api('/api/accounts'), s = (await api('/api/settings')).signatures || {};

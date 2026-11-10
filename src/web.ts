@@ -10,6 +10,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import * as store from "./store.js";
 import * as mail from "./mail.js";
 import * as ai from "./ai.js";
+import * as localLlm from "./local-llm.js";
 import * as outbox from "./outbox.js";
 import * as oauth from "./oauth.js";
 import * as archive from "./archive.js";
@@ -320,7 +321,46 @@ app.post("/api/ai/config", h(async (r) => {
   store.saveAiConfig({ provider: b.provider, baseUrl: b.baseUrl.trim(), model: b.model.trim(), apiKey: key, preset: b.preset });
   return { ok: true };
 }));
-app.post("/api/ai/test", h(async () => ({ reply: await ai.testAi() })));
+const maskKey = (k: string) => (k ? "••••" + k.slice(-4) : "");
+const publicEngine = (e: store.AiConfig) => ({ ...e, apiKey: maskKey(e.apiKey), hasKey: !!e.apiKey });
+/** Motores en orden de uso (el primero responde; si falla, se prueba el siguiente). Las claves nunca salen de este equipo. */
+app.get("/api/ai/engines", h(async () => store.getAiEngines().map(publicEngine)));
+app.post("/api/ai/engines", h(async (r) => {
+  const incoming = (r.body.engines ?? []) as store.AiConfig[], old = store.getAiEngines();
+  const merged = incoming.map((e) => {
+    const prev = old.find((o) => o.id && o.id === e.id);
+    const apiKey = !e.apiKey || e.apiKey.startsWith("••••") ? prev?.apiKey ?? "" : e.apiKey; // una clave enmascarada conserva la guardada
+    return { provider: e.provider, baseUrl: (e.baseUrl ?? "").trim(), model: String(e.model ?? "").trim(), apiKey, preset: e.preset, id: e.id } as store.AiConfig;
+  }).filter(store.aiValid);
+  store.saveAiEngines(merged);
+  return store.getAiEngines().map(publicEngine);
+}));
+/** Modelos que ofrece un proveedor (los gratuitos cambian a menudo, por eso se detectan en vivo). */
+app.post("/api/ai/models", h(async (r) => {
+  const b = r.body as { engineId?: string; provider?: store.AiProvider; baseUrl?: string; apiKey?: string; preset?: string };
+  if (b.provider === "local" || b.preset === "local") return { models: localLlm.MODELS.map((m) => ({ id: m.id })) };
+  const saved = b.engineId ? store.getAiEngines().find((e) => e.id === b.engineId) : undefined;
+  const key = !b.apiKey || b.apiKey.startsWith("••••") ? saved?.apiKey ?? "" : b.apiKey;
+  const preset = b.preset ? store.AI_PRESETS[b.preset] : undefined;
+  const baseUrl = (b.baseUrl || saved?.baseUrl || preset?.baseUrl || "").trim(), provider = b.provider || saved?.provider || preset?.provider || "openai";
+  if (!baseUrl) throw new Error("Falta la URL base del proveedor.");
+  return { models: await ai.listModels({ provider, baseUrl, apiKey: key }) };
+}));
+// Motor integrado: modelos abiertos que corren en este equipo (gratis, sin cuenta, privado)
+app.get("/api/ai/local", h(async () => localLlm.localStatus()));
+app.post("/api/ai/local/download", h(async (r) => { await localLlm.startDownload(String(r.body.id)); return localLlm.downloadStatus(); }));
+app.post("/api/ai/local/cancel", h(async () => { localLlm.cancelDownload(); return localLlm.downloadStatus(); }));
+app.delete("/api/ai/local/:id", h(async (r) => { await localLlm.removeModel(r.params.id); return { ok: true }; }));
+app.post("/api/ai/test", h(async (r) => {
+  const b = (r.body ?? {}) as { engineId?: string; engine?: store.AiConfig };
+  const id = b.engineId;
+  if (b.engine) { // probar sin guardar: la clave escrita en pantalla solo se usa para esta prueba
+    if (!store.aiValid(b.engine)) throw new Error("Faltan datos del motor (URL y modelo).");
+    return { reply: await ai.testEngine(b.engine), engine: ai.engineLabel(b.engine) };
+  }
+  if (id) { const e = store.getAiEngines().find((x) => x.id === id); if (!e) throw new Error("Motor no encontrado"); return { reply: await ai.testEngine(e), engine: ai.engineLabel(e) }; }
+  return { reply: await ai.testAi() };
+}));
 app.post("/api/ai/summarize", h(async (r) => ({ summary: await ai.summarize(await load(r)) })));
 app.post("/api/ai/replies", h(async (r) => ({ options: await ai.replyOptions(await load(r), r.body.language) })));
 app.post("/api/ai/draft", h(async (r) => ai.draft({ instruction: r.body.instruction, tone: r.body.tone, language: r.body.language, original: r.body.uid ? await load(r) : undefined })));

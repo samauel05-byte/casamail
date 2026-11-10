@@ -65,7 +65,9 @@
       "electron/**/*",
       "build/icon.png",
       "build/tray.png",
-      "package.json"
+      "package.json",
+      "!node_modules/@node-llama-cpp/*cuda*/**",
+      "!node_modules/@node-llama-cpp/*vulkan*/**"
     ],
     "artifactName": "CasaMail-${version}-${os}-${arch}.${ext}",
     "mac": {
@@ -117,7 +119,15 @@
       "synopsis": "Cliente de correo local con IA",
       "description": "CasaMail: tu correo en tu propio equipo, con Gmail/Outlook por OAuth y la IA Yerleny.",
       "syncDesktopName": true
-    }
+    },
+    "asarUnpack": [
+      "node_modules/@node-llama-cpp/**",
+      "node_modules/node-llama-cpp/bins/**",
+      "node_modules/node-llama-cpp/llama/**"
+    ]
   },
-  "desktopName": "casamail.desktop"
+  "desktopName": "casamail.desktop",
+  "optionalDependencies": {
+    "node-llama-cpp": "^3.22.3"
+  }
 }

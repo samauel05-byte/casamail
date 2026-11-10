@@ -397,6 +397,92 @@ await t("detecta Ollama local (modelos instalados) y avisa si no está", async (
 });
 store.saveYerleny({ notes: [] });
 
+console.log("\nMotores de IA: varios, con respaldo, y motor local integrado");
+const httpMod = await import("node:http");
+const hits = { a: 0, b: 0, c: 0 };
+const mkSrv = (port: number, hit: keyof typeof hits, handler: (res: import("node:http").ServerResponse, url: string) => void) => new Promise<import("node:http").Server>((r) => { const sv = httpMod.createServer((req, res) => { hits[hit]++; req.resume(); handler(res, req.url ?? ""); }); sv.listen(port, "127.0.0.1", () => r(sv)); });
+const json = (res: import("node:http").ServerResponse, code: number, body: unknown) => { res.statusCode = code; res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify(body)); };
+const limited = await mkSrv(1201, "a", (res) => json(res, 429, { error: { message: "Rate limit exceeded: free tier" } }));
+const badKey = await mkSrv(1202, "c", (res) => json(res, 401, { error: { message: "Invalid API key" } }));
+const modelsSrv = await mkSrv(1203, "b", (res, url) => url.endsWith("/models") ? json(res, 200, { data: [
+  { id: "paga/modelo-caro", pricing: { prompt: "0.001", completion: "0.002" }, supported_parameters: ["tools"], context_length: 8000 },
+  { id: "libre/modelo-gratis:free", pricing: { prompt: "0", completion: "0" }, supported_parameters: ["tools"], context_length: 131072 },
+  { id: "libre/solo-texto:free", pricing: { prompt: "0", completion: "0" }, supported_parameters: [], context_length: 32000 },
+] }) : json(res, 404, {}));
+const eng = (port: number, id: string, extra: Partial<import("../src/store.js").AiConfig> = {}) => ({ provider: "openai" as const, baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: "", model: "m", preset: "custom", id, ...extra });
+const okEngine = eng(1199, "ok");
+
+await t("motores: el formato anterior (un solo motor) se migra sin perder nada", async () => {
+  fs.writeFileSync(path.join(process.env.CASAMAIL_HOME!, "ai.json"), JSON.stringify({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "k", model: "x", preset: "custom" }));
+  const e = store.getAiEngines(); eq(e.length, 1); eq([e[0].model, e[0].apiKey], ["x", "k"]); ok(!!e[0].id, "se le asigna un id");
+  store.saveAiConfig({ ...e[0], model: "y" }); store.saveAiEngines([store.getAiEngines()[0], eng(1201, "fallback")]); store.saveAiConfig({ ...store.getAiEngines()[0], model: "z" });
+  eq(store.getAiEngines().map((x) => x.model), ["z", "m"], "cambiar el principal conserva los de respaldo");
+});
+await t("motores: entradas inválidas se descartan (local no exige URL; los demás sí)", async () => {
+  store.saveAiEngines([{ provider: "local", baseUrl: "", apiKey: "", model: "qwen2.5-1.5b" }, { provider: "openai", baseUrl: "", apiKey: "", model: "x" }, { provider: "openai", baseUrl: "http://x", apiKey: "", model: "" }]);
+  eq(store.getAiEngines().map((x) => x.provider), ["local"]);
+});
+await t("respaldo: si el primer motor falla (429 límite gratuito), responde el segundo", async () => {
+  store.saveAiEngines([eng(1201, "limitado"), okEngine]); hits.a = 0;
+  eq(await ai.testAi(), "OK"); ok(hits.a >= 1, "debió intentar el primero");
+  ok((await ai.summarize({ from: "a@b.c", subject: "x", text: "y" })).includes("Resumen"), "las funciones también usan el respaldo");
+});
+await t("respaldo: respeta el orden elegido (si el primero funciona, el segundo ni se toca)", async () => {
+  store.saveAiEngines([okEngine, eng(1201, "limitado")]); hits.a = 0; await ai.testAi(); eq(hits.a, 0, "no debe llamar al de respaldo");
+});
+await t("respaldo: con clave inválida y límite agotado, sigue hasta uno que funcione", async () => {
+  store.saveAiEngines([eng(1202, "mala-clave"), eng(1201, "limitado"), okEngine]); eq(await ai.testAi(), "OK");
+});
+await t("respaldo: si TODOS fallan, el error explica qué pasó con cada uno", async () => {
+  store.saveAiEngines([eng(1202, "mala-clave", { preset: "groq" }), eng(1201, "limitado", { preset: "gemini" })]); let m = ""; try { await ai.testAi(); } catch (e) { m = (e as Error).message; }
+  ok(/Ningún motor/.test(m) && /groq/.test(m) && /Invalid API key/.test(m) && /gemini/.test(m) && /Rate limit/.test(m), m);
+});
+await t("un solo motor: el error es el del propio motor (sin ruido)", async () => {
+  store.saveAiEngines([eng(1201, "limitado")]); let m = ""; try { await ai.testAi(); } catch (e) { m = (e as Error).message; } ok(/Rate limit/.test(m) && !/Ningún motor/.test(m), m);
+});
+await t("sin motores configurados: mensaje claro con la salida gratuita", async () => {
+  store.saveAiEngines([]); let m = ""; try { await ai.testAi(); } catch (e) { m = (e as Error).message; } ok(/Ajustes → Yerleny/.test(m) && /gratuitas/.test(m), m);
+});
+await t("detectar modelos: los gratuitos y con herramientas primero; 401 explicado", async () => {
+  const l = await ai.listModels({ provider: "openai", baseUrl: "http://127.0.0.1:1203/v1" });
+  eq(l.map((m) => m.id), ["libre/modelo-gratis:free", "libre/solo-texto:free", "paga/modelo-caro"]); eq([l[0].free, l[0].tools, l[2].free], [true, true, false]);
+  let m = ""; try { await ai.listModels({ provider: "openai", baseUrl: "http://127.0.0.1:1202/v1", apiKey: "x" }); } catch (e) { m = (e as Error).message; } ok(/clave no es válida/.test(m), m);
+});
+await t("motor local: catálogo y estado sin ningún modelo descargado", async () => {
+  const L = await import("../src/local-llm.js"); const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cm-mod-")); const prev = process.env.CASAMAIL_MODELS; process.env.CASAMAIL_MODELS = dir;
+  try { const st = await L.localStatus(); eq(st.available, true); eq(st.models.map((m) => [m.id, m.ready]), [["qwen2.5-1.5b", false], ["qwen2.5-7b", false]]); ok(st.models.every((m) => m.license === "Apache-2.0"), "solo modelos Apache-2.0"); ok(["qwen2.5-1.5b", "qwen2.5-7b"].includes(st.recommended), "recomendado");
+    let m = ""; try { await L.localChat("qwen2.5-1.5b", { system: "x", messages: [{ role: "user", text: "hola" }] }); } catch (e) { m = (e as Error).message; } ok(/aún no está descargado/.test(m), "usar un modelo no descargado da un error claro: " + m);
+  } finally { process.env.CASAMAIL_MODELS = prev; }
+});
+await t("motor local: el historial con llamadas a herramientas se convierte bien", async () => {
+  const L = await import("../src/local-llm.js");
+  const h = L.toHistory("SYS", [{ role: "user", text: "busca" }, { role: "assistant", text: "", toolCalls: [{ id: "1", name: "search_mail", args: { text: "x" } }] }, { role: "tool", results: [{ id: "1", name: "search_mail", content: "{\"total\":1}" }] }, { role: "assistant", text: "Listo" }]);
+  eq(h.map((i) => i.type), ["system", "user", "model", "model"]); eq((h[2] as { response: unknown[] }).response, [{ type: "functionCall", name: "search_mail", params: { text: "x" }, result: "{\"total\":1}" }]); eq((h[3] as { response: unknown[] }).response, ["Listo"]);
+});
+const LLM = process.env.LLM_DIR; // carpeta con el modelo ya descargado (hf_Qwen_qwen2.5-1.5b-instruct-q4_k_m.gguf)
+if (LLM && fs.existsSync(LLM)) {
+  const L = await import("../src/local-llm.js"); const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cm-mod-")); process.env.CASAMAIL_MODELS = dir;
+  const f = fs.readdirSync(LLM).find((x) => /1\.5b.*\.gguf$/.test(x))!; fs.symlinkSync(path.join(LLM, f), path.join(dir, f));
+  fs.writeFileSync(path.join(dir, "qwen2.5-1.5b.json"), JSON.stringify({ path: path.join(dir, f), files: [path.join(dir, f)], size: 1, at: Date.now() }));
+  const local = { provider: "local" as const, baseUrl: "", apiKey: "", model: "qwen2.5-1.5b", preset: "local", id: "loc" };
+  await t("MODELO REAL integrado: responde, resume en español y no entra en bucles", async () => {
+    store.saveAiEngines([local]); eq(await ai.testAi(), "OK");
+    const r = await ai.summarize({ from: "Ana <ana@empresa.com>", subject: "Presupuesto marzo", text: "Hola Luis, adjunto el presupuesto de marzo: 4.500 EUR. ¿Puedes confirmar antes del viernes? Gracias, Ana" });
+    ok(/4\.?500/.test(r) && /viernes/i.test(r), "resumen con los datos: " + r); ok(r.length < 900, "sin bucles de repetición (" + r.length + " caracteres)");
+  });
+  await t("MODELO REAL integrado: redacta JSON válido con asunto", async () => { const d = await ai.draft({ instruction: "pídele a Marta que confirme la reunión de mañana" }); ok(d.subject.length > 3 && d.body.length > 20 && !/^asunto/i.test(d.body), JSON.stringify(d)); });
+  await t("MODELO REAL integrado: llama a una herramienta del asistente", async () => {
+    const calls: string[] = []; await ai.agent([], "Busca el correo de Ana sobre el presupuesto", { search: async () => { calls.push("search"); return { total: 0, messages: [] }; }, read: async () => ({}), folders: async () => [] });
+    ok(calls.includes("search"), "no usó la herramienta de búsqueda");
+  });
+  await t("GRATIS CON RESPALDO: la nube falla (límite agotado) y responde el motor integrado", async () => {
+    store.saveAiEngines([eng(1201, "nube-limitada", { preset: "gemini" }), local]); hits.a = 0;
+    const r = await ai.summarize({ from: "a@b.c", subject: "Factura", text: "Su factura de 89 EUR vence el día 20." }); ok(hits.a >= 1 && /89/.test(r), "debió intentar la nube y responder el local: " + r);
+  });
+} else console.log("  – MODELO REAL: omitidas (define LLM_DIR=/carpeta/con/el/modelo para probarlas)");
+limited.close(); badKey.close(); modelsSrv.close();
+store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });
+
 console.log(`\n${pass} OK, ${failN} fallos`);
 imap.close?.(); smtp.close(); fakeAi.close(); mockOauth.close();
 process.exit(failN ? 1 : 0);
