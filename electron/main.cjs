@@ -74,6 +74,26 @@ function openExternal(url) {
   try { const u = new URL(url); if (['https:', 'http:', 'mailto:'].includes(u.protocol)) shell.openExternal(u.toString()); } catch { /* URL inválida */ }
 }
 
+// Notificaciones del sistema para los avisos de CasaMail (funcionan con la ventana cerrada si la app sigue en segundo plano).
+const liveNotifs = new Set(); // se guardan para que no las recoja el recolector de basura antes de que el usuario pulse
+function showNativeNotification(n) {
+  try {
+    const supported = Notification.isSupported();
+    log.info('Aviso nativo:', n.kind, supported ? '' : '(este sistema no admite notificaciones)'); // (sin el contenido del correo: el registro no guarda datos personales)
+    if (!supported) return;
+    if (win && win.isVisible() && win.isFocused() && !win.isMinimized()) return; // si estás mirando CasaMail, basta con el aviso en pantalla
+    const x = new Notification({ title: String(n.title || 'CasaMail').slice(0, 120), body: String(n.body || '').slice(0, 400), silent: n.kind === 'digest' });
+    liveNotifs.add(x);
+    const done = () => liveNotifs.delete(x);
+    x.on('click', () => {
+      done(); showWindow();
+      const go = () => { try { win.webContents.executeJavaScript(n.uid && n.account ? `openFromNotif(${JSON.stringify({ uid: Number(n.uid), account: String(n.account) })})` : 'openPanel()'); } catch { /* ventana cerrándose */ } };
+      if (win && win.webContents.isLoading()) win.webContents.once('did-finish-load', go); else if (win) go();
+    });
+    x.on('close', done); x.on('failed', done);
+    x.show();
+  } catch (e) { log.warn('No se pudo mostrar la notificación', (e && e.message) || e); }
+}
 function showWindow() {
   if (!srv) return;
   if (!win) return createWindow();
@@ -176,6 +196,7 @@ if (!app.requestSingleInstanceLock()) {
     }
     Menu.setApplicationMenu(appMenu());
     log.info('Servidor local en', srv.origin);
+    srv.onNotify(showNativeNotification); // avisos de correo nuevo, reuniones y recordatorios: notificaciones del sistema
     createTray();
     if (!process.argv.includes('--hidden')) createWindow();
   });

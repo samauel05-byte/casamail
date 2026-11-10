@@ -117,12 +117,13 @@ export async function checkMail(now = Date.now(), s = getSettings()): Promise<nu
     const st = state();
     for (const acc of store.loadAccounts()) {
       try {
-        const { messages } = await mail.listMessages(acc, "INBOX", { limit: 20 });
+        const { messages } = await mail.listMessages(acc, "INBOX", { limit: 20, fresh: true }); // conexión propia: no interfiere con la de la interfaz y siempre ve el buzón real
         if (st.reauth?.[acc.id]) { delete st.reauth[acc.id]; }
         const top = messages.reduce((m, x) => Math.max(m, x.uid), 0), prev = st.accounts[acc.id];
         if (!prev || top < prev.lastUid) { st.accounts[acc.id] = { lastUid: top }; saveState(st); continue; } // primera vez (o buzón reiniciado): no avisar de lo que ya estaba
         const fresh = messages.filter((m) => m.uid > prev.lastUid && m.unread && addrOf(m.from) !== acc.email.toLowerCase()).sort((a, b) => a.uid - b.uid);
         st.accounts[acc.id] = { lastUid: Math.max(prev.lastUid, top) }; saveState(st); // se guarda ANTES de avisar: un fallo posterior no repite avisos
+        if (fresh.length) { mail.dropConnection(acc.id); mail.invalidateFolders(acc.id); } // la sesión de la interfaz también debe ver lo nuevo
         let aiLeft = MAX_AI_PER_CYCLE;
         for (const sm of fresh.slice(0, MAX_INDIVIDUAL)) {
           let full: mail.FullMessage; try { full = await mail.getMessage(acc, "INBOX", sm.uid, false); } catch { continue; }
