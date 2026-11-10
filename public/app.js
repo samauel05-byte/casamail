@@ -121,7 +121,7 @@ async function init() {
   if (!S.acct || (S.acct !== '*' && S.acct !== LOCAL && !accs.find(a => a.id === S.acct))) S.acct = accs.length > 1 ? '*' : accs.length ? accs[0].id : LOCAL;
   if (S.acct === LOCAL && !hasLocal && accs.length) S.acct = accs.length > 1 ? '*' : accs[0].id;
   S.macct = ''; S.folder = 'INBOX'; S.cur = null; resetView();
-  S.foldersAt = 0; await Promise.all([list(), folders(true)]); outboxCount();
+  S.foldersAt = 0; if (S.acct === LOCAL) { await folders(true); await list(); } else await Promise.all([list(), folders(true)]); outboxCount();
 }
 function renderWelcome() {
   $('#list').innerHTML = '';
@@ -167,7 +167,7 @@ async function folders(force) {
   }
   const sel = $('#acct'); if (sel) sel.value = S.acct;
   $('#new').onclick = () => compose();
-  if (sel) sel.onchange = async e => { S.acct = e.target.value; S.macct = ''; S.folder = e.target.value === LOCAL ? '' : 'INBOX'; S.aiq = null; S.cur = null; resetView(); await Promise.all([list(), folders()]); };
+  if (sel) sel.onchange = async e => { S.acct = e.target.value; S.macct = ''; S.folder = e.target.value === LOCAL ? '' : 'INBOX'; S.aiq = null; S.cur = null; resetView(); if (S.acct === LOCAL) { await folders(); await list(); } else await Promise.all([list(), folders()]); };
   outboxCount();
 }
 /** Actualiza el contador de no leídos de la carpeta abierta sin volver a consultar todas las carpetas al servidor. */
