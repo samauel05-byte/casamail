@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import crypto from "node:crypto";
+import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import * as store from "./store.js";
 import * as mail from "./mail.js";
@@ -10,7 +13,7 @@ import * as ai from "./ai.js";
 import * as outbox from "./outbox.js";
 import * as oauth from "./oauth.js";
 
-const PORT = Number(process.env.PORT ?? 8025);
+let PORT = Number(process.env.PORT ?? 8025); // se actualiza con el puerto real al arrancar
 const HOST = "127.0.0.1"; // app local: solo accesible desde este equipo
 const TOKEN = process.env.CASAMAIL_TOKEN ?? (() => {
   let t = store.readJson<{ t?: string }>("token.json", {}).t;
@@ -85,7 +88,7 @@ app.post("/api/oauth/start", h(async (r) => {
 }));
 app.get("/api/oauth/status/:state", h(async (r) => oauth.status(r.params.state)));
 const page = (ok: boolean, msg: string) => `<!doctype html><meta charset="utf-8"><title>CasaMail</title><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>body{font:16px system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;background:#f4f1ec;color:#1d1b16}div{background:#fff;padding:36px 44px;border-radius:20px;box-shadow:0 10px 40px #0002;text-align:center;max-width:440px}h1{margin:.2em 0;font-size:22px}.i{font-size:46px}p{color:#5d5a52;line-height:1.5}@media(prefers-color-scheme:dark){body{background:#17161a;color:#eee}div{background:#232228}p{color:#aaa}}</style>
+<style>body{font:16px system-ui,sans-serif;display:grid;place-items:center;height:100vh;margin:0;background:#eef3f9;color:#10203f}div{background:#fff;padding:36px 44px;border-radius:20px;box-shadow:0 10px 40px #0002;text-align:center;max-width:440px}h1{margin:.2em 0;font-size:22px}.i{font-size:46px}p{color:#4a5a78;line-height:1.5}@media(prefers-color-scheme:dark){body{background:#0b111c;color:#eaf0fb}div{background:#121a29}p{color:#a8b5cd}}</style>
 <div><div class="i">${ok ? "✅" : "⚠️"}</div><h1>${ok ? "Cuenta conectada" : "No se pudo conectar"}</h1><p>${msg}</p></div>`;
 const escHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 app.get("/oauth/callback", async (req, res) => {
@@ -167,15 +170,15 @@ app.get("/api/send-delay", h(async () => ({ minutes: outbox.sendDelayMs() / 60_0
 app.post("/api/draft", h(async (r) => mail.saveDraft(acc(r), r.body)));
 
 // Planificador local: envía lo vencido y termina los "posponer".
+const lock = outbox.createSchedulerLock();
 async function tick() {
+  if (!lock.acquire()) return; // otra instancia de CasaMail es la que envía
   await outbox.tick();
   const sn = store.readJson<Snooze[]>("snoozed.json", []);
   const due = sn.filter((s) => s.until <= Date.now());
   for (const s of due) { try { await mail.setFlags(store.getAccount(s.account), s.folder, s.uid, { read: false }); } catch { /* mensaje movido */ } }
   if (due.length) store.writeJson("snoozed.json", store.readJson<Snooze[]>("snoozed.json", []).filter((s) => s.until > Date.now()));
 }
-setInterval(() => tick().catch(() => {}), 10_000).unref();
-tick().catch(() => {});
 
 // ---------- IA ----------
 const load = async (r: Request) => { const m = await mail.getMessage(acc(r), (r.body.folder as string) || "INBOX", Number(r.body.uid), false); return m; };
@@ -221,11 +224,35 @@ app.post("/api/ai/agent", h(async (r) => {
 
 app.use(express.static(pub));
 
-const url = `http://${HOST}:${PORT}/?t=${TOKEN}`;
-app.listen(PORT, HOST, () => {
-  console.log(`\n  CasaMail está corriendo → ${url}\n  (solo accesible desde este equipo)\n`);
-  if (!process.env.CASAMAIL_NO_OPEN) {
+export interface RunningServer { port: number; url: string; origin: string; token: string; close(): Promise<void> }
+
+/** Arranca CasaMail. Lo usan `npm start` y la aplicación de escritorio (Electron). */
+export async function startServer(o: { port?: number; fallbackRandom?: boolean; open?: boolean; quiet?: boolean } = {}): Promise<RunningServer> {
+  const listen = (p: number) => new Promise<http.Server>((resolve, reject) => {
+    const srv = http.createServer(app);
+    srv.once("error", reject);
+    srv.listen(p, HOST, () => { srv.off("error", reject); resolve(srv); });
+  });
+  let server: http.Server;
+  try { server = await listen(o.port ?? PORT); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === "EADDRINUSE" && o.fallbackRandom) server = await listen(0); else throw e; }
+  PORT = (server.address() as AddressInfo).port;
+  const timer = setInterval(() => tick().catch(() => {}), 10_000); timer.unref();
+  tick().catch(() => {});
+  const origin = `http://${HOST}:${PORT}`, url = `${origin}/?t=${TOKEN}`;
+  if (!o.quiet) console.log(`\n  CasaMail está corriendo → ${url}\n  (solo accesible desde este equipo)\n`);
+  if (o.open) {
     const cmd = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
     try { spawn(cmd[0] as string, cmd[1] as string[], { stdio: "ignore", detached: true }).on("error", () => {}).unref(); } catch { /* sin navegador */ }
   }
-});
+  return {
+    port: PORT, url, origin, token: TOKEN,
+    close: () => new Promise<void>((resolve) => { clearInterval(timer); lock.release(); server.close(() => resolve()); server.closeAllConnections?.(); }),
+  };
+}
+
+// Si se ejecuta directamente (npm start / node dist/web.js) arranca solo; si lo importa Electron, no.
+const entry = process.argv[1] ? (() => { try { return pathToFileURL(fs.realpathSync(process.argv[1])).href; } catch { return ""; } })() : "";
+if (entry === import.meta.url) {
+  startServer({ open: !process.env.CASAMAIL_NO_OPEN, fallbackRandom: !process.env.PORT }).catch((e) => { console.error(e.message); process.exit(1); });
+}

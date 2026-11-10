@@ -1,11 +1,20 @@
-# 🏠 CasaMail
+<p align="center"><img src="build/logo.png" alt="CasaMail" width="320"></p>
+
+# CasaMail
 
 Cliente de correo **local** (corre en tu equipo, sin servidores intermedios): IMAP/SMTP de cualquier proveedor, **Gmail y Outlook con OAuth**, interfaz propia, **Yerleny** (su IA integrada) y servidor **MCP** para Claude u otras IAs.
 
-## Arrancar
+## Instalar (aplicación de escritorio)
+Descarga el instalador de tu sistema desde **[Releases](https://github.com/samauel05-byte/casamail/releases)** — Windows (`.exe`), macOS (`.dmg`) o Linux (`.AppImage` / `.deb`) — e instálalo como cualquier programa. Guía completa, avisos del primer arranque y desinstalación: [docs/INSTALAR.md](docs/INSTALAR.md).
+
+La app abre su propia ventana, queda en la bandeja del sistema (para enviar los mensajes programados) y no necesita nada más instalado.
+
+## Desarrollo
 ```bash
 npm install
-npm start               # abre CasaMail en tu navegador (solo accesible desde este equipo)
+npm run desktop         # la app de escritorio en modo desarrollo
+npm start               # solo el servidor, en tu navegador (127.0.0.1)
+npm run dist            # genera el instalador de tu sistema en ./release
 ```
 Añade tu cuenta desde ⚙ Ajustes → Cuentas, o por CLI (`npm run cli -- add`).
 
@@ -41,7 +50,8 @@ Claude Desktop / Cursor / Cline:
 
 ## Pruebas
 ```bash
-npm test                              # 48 pruebas: IMAP/SMTP/XOAUTH2 reales de prueba, OAuth, retirada de mensajes, Yerleny
+npm test                              # 50 pruebas: IMAP/SMTP/XOAUTH2 reales de prueba, OAuth, retirada de mensajes, Yerleny
 PW_PATH=<ruta a playwright> npx tsx tests/ui.ts   # 42 comprobaciones en un navegador real
+npm run test:desktop                  # 15 comprobaciones de la app de escritorio (Electron, necesita xvfb en Linux sin pantalla)
 ```
-Las pruebas de OAuth usan un proveedor falso local; **no se han probado contra Google o Microsoft reales** (necesitan tus credenciales).
+Las pruebas de OAuth usan un proveedor falso local; **no se han probado contra Google o Microsoft reales** (necesitan tus credenciales). Los instaladores de Windows y macOS los genera GitHub Actions y **no se han probado aún en esos sistemas** (el empaquetado y la prueba se hicieron en Linux).

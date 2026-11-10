@@ -100,6 +100,20 @@ await t("respuesta en cola conserva el hilo", async () => {
   const m = sentMails.at(-1)!; ok(m.subject!.startsWith("Re:") && !!m.inReplyTo, "hilo"); void it;
 });
 
+await t("candado: con dos CasaMail abiertos solo uno ejecuta el planificador", async () => {
+  const f = path.join(os.tmpdir(), `cm-lock-${Date.now()}`);
+  const A = outbox.createSchedulerLock(f), B = outbox.createSchedulerLock(f);
+  eq(A.acquire(), true); eq(B.acquire(), false, "B no debe tomar el candado"); eq(A.acquire(), true, "A lo conserva");
+  A.release(); eq(B.acquire(), true, "al soltarlo, B lo toma"); B.release();
+});
+await t("candado: si el dueño muere (candado vencido), otra instancia lo releva", async () => {
+  const f = path.join(os.tmpdir(), `cm-lock2-${Date.now()}`); fs.writeFileSync(f, "999999:muerto");
+  const old = new Date(Date.now() - 120_000); fs.utimesSync(f, old, old);
+  const C = outbox.createSchedulerLock(f, 45_000); eq(C.acquire(), true); C.release();
+  const f2 = path.join(os.tmpdir(), `cm-lock3-${Date.now()}`); fs.writeFileSync(f2, "1:vivo");
+  eq(outbox.createSchedulerLock(f2, 45_000).acquire(), false, "un candado reciente NO se puede quitar"); fs.unlinkSync(f2);
+});
+
 console.log("\nIA (servidor falso compatible con OpenAI)");
 store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });
 const sample = { from: "Ana <ana@empresa.com>", subject: "Presupuesto", text: "Confirma el presupuesto" };

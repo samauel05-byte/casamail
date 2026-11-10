@@ -1,7 +1,7 @@
 {
   "name": "casamail",
-  "version": "0.1.0",
-  "description": "CasaMail: cliente de correo local (IMAP/SMTP) con IA propia, interfaz tipo Gmail y servidor MCP",
+  "version": "0.2.0",
+  "description": "CasaMail: cliente de correo local con Yerleny (IA), Gmail/Outlook con OAuth y servidor MCP",
   "type": "module",
   "bin": {
     "casamail": "dist/cli.js",
@@ -14,7 +14,11 @@
     "cli": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
     "start": "tsx src/web.ts",
-    "test": "tsx tests/e2e.ts"
+    "test": "tsx tests/e2e.ts",
+    "desktop": "npm run build && electron .",
+    "pack": "npm run build && electron-builder --dir",
+    "dist": "npm run build && electron-builder",
+    "test:desktop": "tsc && xvfb-run -a tsx tests/desktop.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
@@ -29,9 +33,90 @@
     "@types/node": "^22.0.0",
     "@types/nodemailer": "^6.4.0",
     "@types/smtp-server": "^3.5.13",
+    "electron": "^45.2.3",
+    "electron-builder": "^26.18.0",
     "hoodiecrow-imap": "^3.3.1",
     "smtp-server": "^3.21.4",
     "tsx": "^4.0.0",
     "typescript": "^5.5.0"
-  }
+  },
+  "main": "electron/main.cjs",
+  "author": {
+    "name": "samauel05-byte",
+    "email": "samauel05-byte@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/samauel05-byte/casamail",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samauel05-byte/casamail.git"
+  },
+  "build": {
+    "appId": "app.casamail.desktop",
+    "productName": "CasaMail",
+    "copyright": "CasaMail",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "public/**/*",
+      "electron/**/*",
+      "build/icon.png",
+      "build/tray.png",
+      "package.json"
+    ],
+    "artifactName": "CasaMail-${version}-${os}-${arch}.${ext}",
+    "mac": {
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "shortcutName": "CasaMail"
+    },
+    "linux": {
+      "icon": "build/icon.png",
+      "category": "Network;Email",
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "maintainer": "samauel05-byte <samauel05-byte@users.noreply.github.com>",
+      "synopsis": "Cliente de correo local con IA",
+      "description": "CasaMail: tu correo en tu propio equipo, con Gmail/Outlook por OAuth y la IA Yerleny.",
+      "syncDesktopName": true
+    }
+  },
+  "desktopName": "casamail.desktop"
 }

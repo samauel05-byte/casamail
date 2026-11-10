@@ -1,0 +1,81 @@
+// Prueba de la aplicación de escritorio (Electron) con una pantalla virtual:
+//   npx tsc && PW_PATH=<playwright> xvfb-run -a npx tsx tests/desktop.ts [ruta-al-ejecutable-empaquetado]
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+process.env.CASAMAIL_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "casamail-desk-"));
+const HOME = process.env.CASAMAIL_HOME;
+process.env.CASAMAIL_OAUTH_MOCK = "http://127.0.0.1:1300";
+const { startImap, startSmtp, startFakeAi, startMockOAuth } = await import("./servers.js");
+const store = await import("../src/store.js");
+const pw = await import(process.env.PW_PATH ?? "playwright");
+const electron = pw._electron;
+const imapSrv = startImap(); startSmtp(); startFakeAi(); startMockOAuth(imapSrv as never);
+store.addAccount(store.buildAccount({ id: "t", email: "yo@casa.test", pass: "secreto", user: "yo", imap: { host: "127.0.0.1", port: 1143, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } }));
+fs.writeFileSync(path.join(HOME, "desktop.json"), JSON.stringify({ background: true, hintShown: true })); // modo "seguir en segundo plano"
+
+let bad = 0;
+const check = (name: string, c: boolean) => { console.log(c ? "  ✔" : "  ✘", name); if (!c) bad++; };
+const packaged = process.argv[2];
+const root = path.resolve(import.meta.dirname, "..");
+const launch = () => electron.launch(packaged
+  ? { executablePath: packaged, args: ["--no-sandbox"], env: { ...process.env, CASAMAIL_HOME: HOME } as Record<string, string> }
+  : { executablePath: path.join(root, "node_modules/electron/dist/electron"), args: ["--no-sandbox", root], cwd: root, env: { ...process.env, CASAMAIL_HOME: HOME } as Record<string, string> });
+
+const app = await launch();
+const win = await app.firstWindow();
+await win.waitForSelector(".m", { timeout: 30000 });
+check("la app arranca y muestra la bandeja en su propia ventana", (await win.locator(".m").count()) >= 1);
+check("título de la ventana: CasaMail", (await win.title()) === "CasaMail");
+const url = win.url();
+check("sirve desde 127.0.0.1 (solo este equipo)", url.startsWith("http://127.0.0.1:"));
+await new Promise((r) => setTimeout(r, 600)); await win.screenshot({ path: process.env.SHOT ?? "/tmp/desktop.png" }).catch(() => {});
+check("el logo de CasaMail está en la cabecera", (await win.locator("#logomark svg").count()) === 1);
+check("no tiene Node.js expuesto a la página (aislamiento)", await win.evaluate(() => typeof (window as unknown as { require?: unknown }).require === "undefined" && typeof (window as unknown as { process?: unknown }).process === "undefined"));
+check("candado del planificador tomado por la app", fs.existsSync(path.join(HOME, "scheduler.lock")));
+
+await app.evaluate(({ shell }) => { (globalThis as unknown as { opened: string[] }).opened = []; shell.openExternal = async (u: string) => { (globalThis as unknown as { opened: string[] }).opened.push(u); }; });
+// OAuth: la autorización de Google se abre en el navegador del sistema y la conexión se completa en la app
+await win.click("#cfg"); await win.click('[data-add="google"]'); await win.waitForSelector("#ocid");
+await win.fill("#ocid", "mock-client"); await win.fill("#ocs", "shh");
+await app.evaluate(() => { (globalThis as unknown as { opened: string[] }).opened = []; });
+await win.click("#ogo");
+await win.waitForFunction(() => document.body.textContent!.includes("Esperando tu autorización"), null, { timeout: 10000 });
+const oauthUrl = (await app.evaluate(() => (globalThis as unknown as { opened: string[] }).opened)).find((u) => u.startsWith("http://127.0.0.1:1300/authorize"));
+check("OAuth: la autorización se abre en el navegador del sistema (no en la app)", !!oauthUrl && (await app.windows()).length === 1);
+if (oauthUrl) {
+  const r = await fetch(oauthUrl, { redirect: "manual" });            // lo que haría el navegador tras iniciar sesión
+  const back = await fetch(r.headers.get("location")!);              // ...y volver al callback de la app
+  check("OAuth: el callback local confirma la conexión", (await back.text()).includes("Cuenta conectada"));
+  await win.waitForFunction(() => [...document.querySelectorAll(".toast .tmsg")].some((e) => e.textContent!.includes("conectada")), null, { timeout: 15000 });
+  check("OAuth: la app detecta la cuenta conectada", true);
+}
+
+// enlaces externos: nunca dentro de la app, siempre en el navegador del sistema
+await win.evaluate(() => { window.open("https://accounts.google.com/x"); });
+await win.evaluate(() => { const a = document.createElement("a"); a.href = "https://example.com/y"; a.target = "_self"; document.body.appendChild(a); a.click(); });
+await win.evaluate(() => { window.open("file:///etc/passwd"); window.open("javascript:alert(1)"); });
+await new Promise((r) => setTimeout(r, 800));
+const opened = await app.evaluate(() => (globalThis as unknown as { opened: string[] }).opened);
+check("enlaces https externos van al navegador del sistema", opened.includes("https://accounts.google.com/x") && opened.includes("https://example.com/y"));
+check("file:// y javascript: se bloquean", !opened.some((u) => u.startsWith("file:") || u.startsWith("javascript:")));
+check("la ventana de la app no salió de CasaMail", win.url().startsWith("http://127.0.0.1:") && (await app.windows()).length === 1);
+
+// segunda instancia: no abre otra app, devuelve el foco a la primera
+const { spawn } = await import("node:child_process");
+const second = spawn(packaged ?? path.join(root, "node_modules/electron/dist/electron"), packaged ? ["--no-sandbox"] : ["--no-sandbox", root], { env: { ...process.env, CASAMAIL_HOME: HOME }, stdio: "ignore" });
+const code = await new Promise<number | null>((r) => { second.on("exit", r); setTimeout(() => r(-999), 15000); });
+check("una segunda CasaMail no se abre (instancia única)", code !== -999);
+if (code === -999) second.kill();
+
+// cerrar la ventana: sigue en segundo plano (envíos programados) y "Salir" la cierra limpiamente
+await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].close(); });
+await new Promise((r) => setTimeout(r, 800));
+const visible = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => w.isVisible()).length);
+check("al cerrar la ventana la app sigue en segundo plano", visible === 0 && fs.existsSync(path.join(HOME, "scheduler.lock")));
+await app.evaluate(({ app: a }) => { a.quit(); });
+await new Promise((r) => setTimeout(r, 2500));
+check("'Salir' cierra el servidor y suelta el candado", !fs.existsSync(path.join(HOME, "scheduler.lock")));
+console.log(bad ? `\n${bad} fallos` : "\nDESKTOP OK");
+try { await app.close(); } catch { /* ya cerrada */ }
+process.exit(bad ? 1 : 0);

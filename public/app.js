@@ -44,6 +44,8 @@ const ICONS = {
   user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
   home: '<path d="M8 15.5 16 9l8 6.5"/>',
 };
+/* Logo de CasaMail (vectorial; usa las variables de color del tema) */
+const LOGO = (w = 44) => `<svg viewBox="455 165 630 530" width="${w}" height="${Math.round(w * 0.84)}" aria-hidden="true" style="display:block"><path d="M540 418V618Q540 652 574 652H962Q996 652 996 618V418Z" fill="var(--logo-sky)"/><path d="M545 425 767 555 990 425 768 225Z" fill="var(--logo-paper)"/><g fill="none" stroke="var(--logo-navy)" stroke-linecap="round" stroke-linejoin="round"><path d="M545 425 767 555 990 425" stroke-width="34"/><path d="M540 418V618Q540 652 574 652H962Q996 652 996 618V418" stroke-width="34"/><path d="M566 632 698 532" stroke-width="16"/><path d="M495 422 768 207 1042 425" stroke-width="56"/></g><path d="M920 262V242Q920 228 934 228H998Q1012 228 1012 242V352Z" fill="var(--logo-navy)"/><g fill="var(--logo-navy)"><rect x="715" y="327" width="48" height="48" rx="9"/><rect x="777" y="327" width="48" height="48" rx="9"/><rect x="715" y="387" width="48" height="48" rx="9"/><rect x="777" y="387" width="48" height="48" rx="9"/></g></svg>`;
 const I = (n, c = '') => `<svg class="ic ${c}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 
 /* ---------- estado ---------- */
@@ -100,7 +102,7 @@ function setTheme(m, save = true) {
 /* ---------- iconos estáticos ---------- */
 mkIcon('#menu', 'menu'); mkIcon('#searchic', 'search'); mkIcon('#cfg', 'sliders'); mkIcon('#cmin', 'minus'); mkIcon('#draftb', 'file'); mkIcon('#cclose', 'x'); mkIcon('#sendnow', 'bolt'); mkIcon('#sched', 'clock');
 mkIcon('#attlabel', 'clip'); mkIcon('#aiboxic', 'sparkles'); mkIcon('#dclose', 'x'); mkIcon('#cgo', 'send');
-$('#logomark').innerHTML = `<svg class="ic lg" viewBox="0 0 24 24" style="stroke-width:2"><path d="M3 11.5 12 4l9 7.5V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="m6 13 6 4 6-4"/></svg>`;
+$('#logomark').innerHTML = LOGO(44);
 $('#aisearch').innerHTML = `${I('sparkles', 'sm')} IA`; $('#asst').innerHTML = `${YL('sm')} Yerleny`; $('#aitog').innerHTML = `${I('sparkles', 'sm')} Redactar con Yerleny`; $('#drico').innerHTML = YL('md');
 let themeSaved = 'auto'; try { themeSaved = localStorage.getItem('cm-theme') || 'auto'; } catch { /* ignore */ }
 setTheme(themeSaved, false);
@@ -118,7 +120,7 @@ async function init() {
 }
 function renderWelcome() {
   $('#list').innerHTML = '';
-  $('#view').innerHTML = `<div class="empty" style="min-height:100%"><div class="big" style="width:88px;height:88px;border-radius:28px">${I('mail', 'lg')}</div>
+  $('#view').innerHTML = `<div class="empty" style="min-height:100%"><div style="margin-bottom:8px">${LOGO(150)}</div>
     <h3 style="font-size:26px;letter-spacing:-.02em">Bienvenido a CasaMail</h3>
     <p>Tu correo, en tu propio equipo. Conecta tu primera cuenta para empezar: no hay servidores intermedios y tus mensajes no salen de aquí.</p>
     <div class="row" style="justify-content:center;margin-top:14px"><button class="btn btn-primary" data-add-first="google">Conectar Gmail</button><button class="btn" data-add-first="microsoft">Conectar Outlook</button><button class="btn" data-add-first="imap">Otra cuenta (IMAP)</button></div></div>`;
@@ -442,12 +444,14 @@ async function addPane(kind, hint) {
 }
 let oauthPoll = null;
 function oauthConnect(provider, hint) {
-  const popup = window.open('about:blank', 'cm_oauth', 'width=520,height=740'); // dentro del gesto del usuario, para que no lo bloqueen
+  // En la app de escritorio la autorización se abre en el navegador del sistema (Google/Microsoft bloquean los navegadores embebidos).
+  const desktop = /Electron\//.test(navigator.userAgent);
+  const popup = desktop ? null : window.open('about:blank', 'cm_oauth', 'width=520,height=740'); // dentro del gesto del usuario, para que no lo bloqueen
   const v = id => $(id)?.value.trim() || undefined, p = $('#addpane');
   if (!v('#ocid') && !$('#ocid')?.value) { popup && popup.close(); $('#ost').innerHTML = '<span class="err">Pega primero el ID de cliente.</span>'; return; }
   api('/api/oauth/start', { provider, clientId: v('#ocid'), clientSecret: v('#ocs'), tenant: v('#oct'), loginHint: hint }).then(r => {
-    if (popup) popup.location.href = r.url;
-    p.innerHTML = `<div class="wait"><div class="spin"></div><b>Esperando tu autorización…</b><span class="mut">Termina el inicio de sesión en la ventana que se abrió.</span>${popup ? '' : `<a class="btn btn-primary" href="${esc(r.url)}" target="_blank" rel="noopener">Abrir enlace de autorización</a>`}<button class="btn btn-ghost btn-sm" id="ocx">Cancelar</button></div>`;
+    if (popup) popup.location.href = r.url; else if (desktop) window.open(r.url);
+    p.innerHTML = `<div class="wait"><div class="spin"></div><b>Esperando tu autorización…</b><span class="mut">Termina el inicio de sesión en la ventana que se abrió.</span>${popup ? '' : `<a class="btn ${desktop ? '' : 'btn-primary'}" href="${esc(r.url)}" target="_blank" rel="noopener">${desktop ? 'Volver a abrir en el navegador' : 'Abrir enlace de autorización'}</a>`}<button class="btn btn-ghost btn-sm" id="ocx">Cancelar</button></div>`;
     $('#ocx').onclick = () => { clearInterval(oauthPoll); popup && popup.close(); addPane(provider, hint); };
     clearInterval(oauthPoll); const t0 = Date.now();
     oauthPoll = setInterval(async () => {

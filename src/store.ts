@@ -28,6 +28,7 @@ export const PRESETS: Record<string, { imap: Endpoint; smtp: Endpoint; note?: st
 };
 
 const dir = process.env.CASAMAIL_HOME ?? path.join(os.homedir(), ".casamail");
+export const dataDir = dir;
 const file = path.join(dir, "accounts.json");
 
 export function loadAccounts(): Account[] {

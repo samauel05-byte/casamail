@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
-import { readJson, writeJson, getAccount, getSettings } from "./store.js";
+import fs from "node:fs";
+import path from "node:path";
+import { readJson, writeJson, getAccount, getSettings, dataDir } from "./store.js";
 import { sendMessage, type Outgoing } from "./mail.js";
 
 /** Plazo máximo para retirar un mensaje: 10 minutos. Pasado ese tiempo ya no se puede. */
@@ -72,4 +74,28 @@ export async function tick(): Promise<number> {
     }
   } finally { running = false; }
   return sent;
+}
+
+/**
+ * Candado entre procesos: si hay dos CasaMail abiertos (p. ej. la app de escritorio y `npm start`),
+ * solo uno ejecuta el planificador, para no enviar dos veces el mismo mensaje programado.
+ * El dueño renueva la fecha del archivo en cada pasada; si deja de hacerlo (se cerró o falló), otro lo releva.
+ */
+export function createSchedulerLock(file = path.join(dataDir, "scheduler.lock"), staleMs = 45_000) {
+  const id = `${process.pid}:${crypto.randomUUID()}`;
+  let held = false;
+  const tryCreate = () => { try { fs.writeFileSync(file, id, { flag: "wx", mode: 0o600 }); return true; } catch { return false; } };
+  const mine = () => { try { return fs.readFileSync(file, "utf8") === id; } catch { return false; } };
+  return {
+    acquire(): boolean {
+      fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+      if (held) { if (mine()) { const now = new Date(); try { fs.utimesSync(file, now, now); } catch { /* ignore */ } return true; } held = false; }
+      if (tryCreate()) return (held = true);
+      try {
+        if (Date.now() - fs.statSync(file).mtimeMs > staleMs) { fs.unlinkSync(file); if (tryCreate()) return (held = true); }
+      } catch { /* otro proceso se adelantó */ }
+      return false;
+    },
+    release() { if (held && mine()) { try { fs.unlinkSync(file); } catch { /* ignore */ } } held = false; },
+  };
 }
