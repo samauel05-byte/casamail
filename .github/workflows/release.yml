@@ -1,0 +1,54 @@
+name: Instaladores
+# Genera los instaladores de CasaMail para Windows, macOS y Linux.
+#  - Al subir una etiqueta "v*" (p. ej. v0.2.0) los publica en una Release de GitHub.
+#  - Con "Run workflow" (manual) solo los genera como artefactos descargables.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-22.04, name: linux }
+          - { os: windows-latest, name: windows }
+          - { os: macos-latest, name: macos }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx electron-builder --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"   # sin certificado de firma (instaladores sin firmar)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CasaMail-${{ matrix.name }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-all
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist-all/*
+          generate_release_notes: true
