@@ -122,6 +122,8 @@ const wrap = (m: { from: string; to?: string; subject: string; date?: string | n
 export type MailLike = { from: string; to?: string; subject: string; date?: string | null; text: string };
 
 // ============ Funciones de IA ============
+/** Prueba UN motor concreto (sin respaldo), para saber si ese motor funciona. */
+export async function testEngine(e: AiConfig) { return (await chat({ system: "Responde solo con la palabra OK.", messages: [{ role: "user", text: "ping" }], temperature: 0, maxTokens: 16 }, e)).text.trim(); }
 export async function testAi() { return ask("Responde solo con la palabra OK.", "ping", 0); }
 
 export const summarize = (m: MailLike) => ask(
@@ -131,7 +133,8 @@ export async function draft(o: { instruction: string; tone?: string; language?: 
   const sys = `Redactas correos electrónicos. Devuelve SOLO JSON: {"subject": string, "body": string}. El cuerpo en texto plano, sin firma (se añade aparte), sin "Asunto:" dentro del cuerpo. Tono: ${o.tone || getYerleny().tone || "profesional y cercano"}. Idioma: ${o.language ?? "el mismo que el correo original, o el de la instrucción si no hay original"}. ${o.original ? "Es una respuesta: deja subject vacío." : "Es un correo NUEVO: subject es OBLIGATORIO (breve y concreto, nunca vacío)."} No inventes datos (fechas, cifras, nombres) que no estén en la instrucción o el correo. ${SAFETY}`;
   const user = `${o.original ? wrap(o.original) + "\n\n" : ""}Instrucción del usuario: ${o.instruction}`;
   const r = parseJson<{ subject?: string; body?: string; asunto?: string; cuerpo?: string }>(await ask(sys, user, 0.5, 700));
-  return { subject: r.subject ?? r.asunto ?? "", body: r.body ?? r.cuerpo ?? "" };
+  const body = (r.body ?? r.cuerpo ?? "").replace(/^\s*(asunto|subject)\s*:[^\n]*\n+/i, "").trim(); // los modelos pequeños a veces repiten "Asunto:" dentro del cuerpo
+  return { subject: r.subject ?? r.asunto ?? "", body };
 }
 
 export async function replyOptions(m: MailLike, language?: string) {
