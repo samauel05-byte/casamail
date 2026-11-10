@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="es" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>CasaMail</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23b5502c'/%3E%3Cpath d='M8 15.5 16 9l8 6.5V23a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1z' fill='none' stroke='white' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='m10 17 6 4 6-4' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="app.css">
+<script>try{var t=localStorage.getItem('cm-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<a class="skip" href="#list">Saltar a la lista</a>
+
+<header id="top">
+  <button class="iconbtn only-narrow" id="menu" aria-label="Menú" title="Menú"></button>
+  <div class="logo"><span class="logo-mark" id="logomark"></span><span class="logo-word">Casa<b>Mail</b></span></div>
+  <div class="search" role="search" id="searchbox">
+    <span class="search-ic" id="searchic"></span>
+    <input id="q" type="search" placeholder="Buscar en el correo…" autocomplete="off" aria-label="Buscar">
+    <button class="aitoggle" id="aisearch" aria-pressed="false" title="Pregúntale a Yerleny en lenguaje natural"></button>
+    <span class="kbd" id="kslash">/</span>
+  </div>
+  <span class="grow"></span>
+  <button class="btn btn-ai hide-narrow" id="asst" title="Habla con Yerleny"></button>
+  <button class="iconbtn" id="theme" aria-label="Cambiar tema" title="Tema"></button>
+  <button class="iconbtn" id="cfg" aria-label="Ajustes" title="Ajustes"></button>
+</header>
+
+<main id="main">
+  <aside id="side" aria-label="Carpetas"></aside>
+  <section id="list" class="pane" aria-label="Mensajes" tabindex="-1"></section>
+  <section id="view" class="pane" aria-label="Lectura"></section>
+</main>
+<div id="scrim"></div>
+
+<div id="compose" role="dialog" aria-label="Redactar mensaje" hidden>
+  <div class="cw-head"><b id="ctitle">Mensaje nuevo</b><span class="grow"></span>
+    <button class="iconbtn" id="draftb" aria-label="Guardar borrador" title="Guardar borrador"></button>
+    <button class="iconbtn" id="cmin" aria-label="Minimizar" title="Minimizar"></button>
+    <button class="iconbtn" id="cclose" aria-label="Cerrar" title="Cerrar"></button></div>
+  <div class="cw-body">
+    <div class="cw-row" id="rowfrom"><label for="from">De</label><select id="from"></select></div>
+    <div class="cw-row" id="rowto"><label for="to">Para</label><input id="to" list="cl" autocomplete="off" spellcheck="false"><datalist id="cl"></datalist><button class="linkbtn" id="showcc" type="button">Cc</button></div>
+    <div class="cw-row" id="rowcc" hidden><label for="cc">Cc</label><input id="cc" autocomplete="off" spellcheck="false"></div>
+    <div class="cw-row" id="rowsub"><label for="sub">Asunto</label><input id="sub" autocomplete="off"></div>
+    <div class="aibox" id="aibox" hidden>
+      <div class="aibox-h"><span id="aiboxic"></span><b>Redactar con Yerleny</b><span class="mut">Cuéntale qué quieres decir y lo escribe por ti.</span></div>
+      <textarea id="aiins" rows="2" placeholder="Ej.: pídele a Ana que confirme el presupuesto antes del viernes, tono amable"></textarea>
+      <div class="row">
+        <select id="aitone" aria-label="Tono"><option value="">Mi estilo</option><option value="profesional y cercano">Profesional</option><option value="formal">Formal</option><option value="amable y cercano">Cercano</option><option value="breve y directo">Directo</option></select>
+        <button class="btn btn-ai" id="aigo">Generar</button><span id="aist" class="mut"></span>
+      </div>
+    </div>
+    <textarea id="body" placeholder="Escribe tu mensaje…" aria-label="Mensaje"></textarea>
+    <div id="fl" class="files"></div>
+  </div>
+  <div class="cw-foot">
+    <button class="btn btn-primary" id="send">Enviar</button>
+    <button class="iconbtn" id="sendnow" aria-label="Enviar ya" title="Enviar ya (después no podrás retirarlo)"></button>
+    <button class="iconbtn" id="sched" aria-label="Programar envío" title="Programar envío"></button>
+    <input type="datetime-local" id="when" hidden aria-label="Fecha de envío">
+    <label class="iconbtn" for="files" title="Adjuntar archivos" id="attlabel"></label><input type="file" id="files" multiple hidden>
+    <button class="btn btn-ai" id="aitog"></button>
+    <select id="rw" title="Reescribir con IA" aria-label="Reescribir con IA"><option value="">Reescribir…</option><option value="improve">Mejorar</option><option value="fix">Corregir</option><option value="shorten">Acortar</option><option value="expand">Ampliar</option><option value="formal">Más formal</option><option value="friendly">Más cercano</option><option value="translate:inglés">Traducir a inglés</option><option value="translate:español">Traducir a español</option></select>
+    <span class="grow"></span><span id="cs" class="mut"></span>
+      </div>
+  <div class="cw-hint" id="sendhint"></div>
+</div>
+
+<aside id="drawer" role="dialog" aria-label="Yerleny, asistente de IA" hidden>
+  <div class="dr-head"><span id="drico"></span><div class="dr-id"><b>Yerleny</b><span class="mut">Tu IA de correo · nunca envía nada sin tu OK</span></div><span class="grow"></span><button class="iconbtn" id="dclose" aria-label="Cerrar"></button></div>
+  <div id="chat"></div>
+  <div class="dr-foot"><input id="ci" placeholder="Pregunta o pide algo…" autocomplete="off" aria-label="Mensaje para el asistente"><button class="btn btn-primary" id="cgo" aria-label="Enviar"></button></div>
+</aside>
+
+<div id="modal" hidden><div id="mbox" role="dialog" aria-modal="true"></div></div>
+<div id="palette" hidden><div class="pal"><input id="pin" placeholder="Escribe una acción o pregunta algo a la IA…" autocomplete="off" aria-label="Paleta de comandos"><div id="pres"></div></div></div>
+<div id="toasts" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
