@@ -1,5 +1,5 @@
 import * as archive from "./archive.js";
-import { eachSource } from "./mail.js";
+import { eachSource, dropConnection, invalidateFolders } from "./mail.js";
 import type { Job } from "./jobs.js";
 import type { Account } from "./store.js";
 
@@ -14,6 +14,7 @@ export async function offload(acc: Account, o: OffloadOpts, j: Job, store: Pick<
   const target = archive.cleanFolder(o.target ?? `${acc.email}/${o.folder}`);
   const before = o.olderThanDays ? new Date(Date.now() - o.olderThanDays * 864e5) : undefined;
   j.detail = `${acc.email} · ${o.folder}`;
+  try {
   await eachSource(acc, o.folder, { before, batch: 10, onTotal: (n) => { j.total = n; }, onDeleted: (n) => { j.deleted += n; }, cancelled: () => j.cancel }, async (items) => {
     const safe: number[] = [];
     for (const it of items) {
@@ -26,4 +27,5 @@ export async function offload(acc: Account, o: OffloadOpts, j: Job, store: Pick<
     }
     return o.deleteFromServer ? safe : undefined;
   });
+  } finally { dropConnection(acc.id); invalidateFolders(acc.id); } // el borrado se hizo por otra conexión: la de la interfaz debe volver a ver el buzón real
 }

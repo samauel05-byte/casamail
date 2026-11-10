@@ -8,7 +8,7 @@ import type { Msg, ToolDef, ToolCall } from "./ai.js";
  * Motor de IA integrado en CasaMail: modelos abiertos (Apache-2.0) que corren en TU equipo.
  * Gratis, sin cuenta, sin clave, sin internet (salvo para descargar el modelo una vez) y 100 % privado.
  * Es más limitado que Claude/GPT/Gemini: sirve para resumir, redactar, reescribir y tareas sencillas.
- * Se carga solo al usarlo y se libera de la memoria tras 10 minutos sin uso.
+ * Se carga solo al usarlo y se libera de la memoria tras 30 minutos sin uso.
  */
 export interface LocalModel { id: string; label: string; uri: string; bytes: number; ramGB: number; license: string; blurb: string }
 export const MODELS: LocalModel[] = [
@@ -81,7 +81,8 @@ export async function localStatus() {
 interface Engine { id: string; model: import("node-llama-cpp").LlamaModel; ctx: import("node-llama-cpp").LlamaContext; lastUse: number }
 let engine: Engine | null = null, llamaInst: import("node-llama-cpp").Llama | null = null, queue: Promise<unknown> = Promise.resolve();
 async function disposeEngine() { const e = engine; engine = null; if (e) { try { await e.ctx.dispose(); await e.model.dispose(); } catch { /* ya liberado */ } } }
-setInterval(() => { if (engine && Date.now() - engine.lastUse > 10 * 60_000) void disposeEngine(); }, 60_000).unref();
+const IDLE_UNLOAD_MS = 30 * 60_000; // se libera la RAM tras 30 min sin uso
+setInterval(() => { if (engine && Date.now() - engine.lastUse > IDLE_UNLOAD_MS) void disposeEngine(); }, 60_000).unref();
 
 async function ensure(id: string): Promise<Engine> {
   if (engine?.id === id) { engine.lastUse = Date.now(); return engine; }
@@ -134,3 +135,15 @@ export function localChat(modelId: string, o: { system: string; messages: Msg[];
   return p;
 }
 export const shutdownLocal = () => disposeEngine();
+
+/**
+ * Carga el modelo del motor principal en segundo plano, para que la primera respuesta no espere a leerlo del disco.
+ * `onlySmall`: al arrancar solo se precalienta el modelo ligero (el grande ocupa varios GB de RAM: se carga al usarlo).
+ */
+export async function warmup(onlySmall: boolean): Promise<boolean> {
+  const { getAiEngines } = await import("./store.js");
+  const e = getAiEngines()[0];
+  if (!e || e.provider !== "local" || !isReady(e.model) || (onlySmall && e.model !== "qwen2.5-1.5b") || engine?.id === e.model) return false;
+  void ensure(e.model).catch(() => undefined);
+  return true;
+}

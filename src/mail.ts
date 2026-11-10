@@ -28,35 +28,93 @@ async function smtp(acc: Account) {
   return nodemailer.createTransport({ host: acc.smtp.host, port: acc.smtp.port, secure: acc.smtp.secure, auth });
 }
 
-async function withImap<T>(acc: Account, fn: (c: ImapFlow) => Promise<T>): Promise<T> {
-  const client = new ImapFlow({
-    host: acc.imap.host, port: acc.imap.port, secure: acc.imap.secure,
-    auth: await imapAuth(acc), logger: false,
-  });
-  client.on("error", () => {});
-  await client.connect();
-  try { return await fn(client); } finally { await client.logout().catch(() => {}); }
+// ---------- conexiones IMAP reutilizadas (una por cuenta) ----------
+// Abrir una conexión nueva en cada acción (conectar, cifrar, autenticar, abrir carpeta, cerrar) cuesta ~12 viajes de ida
+// y vuelta al servidor: con 100 ms de latencia son más de un segundo POR CLIC. Se mantiene abierta una conexión por cuenta;
+// se cierra tras unos minutos sin uso, y si el servidor la cerró por inactividad se reconecta sola.
+const IDLE_MS = Number(process.env.CASAMAIL_IMAP_IDLE_MS ?? 4 * 60_000);
+interface Pooled { client: ImapFlow; key: string; timer?: NodeJS.Timeout }
+const pool = new Map<string, Pooled>(), connecting = new Map<string, Promise<Pooled>>();
+const fingerprint = (a: Account) => [a.imap.host, a.imap.port, a.imap.secure, a.user, a.pass, a.oauth?.refreshToken ?? ""].join("|"); // si cambian las credenciales, se reconecta
+
+async function openImap(acc: Account): Promise<ImapFlow> {
+  const c = new ImapFlow({ host: acc.imap.host, port: acc.imap.port, secure: acc.imap.secure, auth: await imapAuth(acc), logger: false });
+  c.on("error", () => {});
+  try { await c.connect(); }
+  catch (e) { try { c.close(); } catch { /* ya cerrada */ } throw e; } // si falla la autenticación la librería deja el socket abierto: se cierra para no acumular conexiones
+  return c;
 }
+function touch(id: string, e: Pooled) { clearTimeout(e.timer); e.timer = setTimeout(() => dropConnection(id), IDLE_MS); e.timer.unref?.(); }
+/** Cierra la conexión reutilizada de una cuenta (p. ej. al quitarla). */
+export function dropConnection(id: string) {
+  const e = pool.get(id); if (!e) return;
+  pool.delete(id); clearTimeout(e.timer); e.client.logout().catch(() => e.client.close());
+}
+export function closeConnections() { for (const id of [...pool.keys()]) dropConnection(id); }
+async function pooled(acc: Account): Promise<Pooled> {
+  const key = fingerprint(acc), cur = pool.get(acc.id);
+  if (cur && cur.key === key && cur.client.usable) { touch(acc.id, cur); return cur; }
+  if (cur) dropConnection(acc.id);
+  let p = connecting.get(acc.id);
+  if (!p) {
+    p = (async () => {
+      const e: Pooled = { client: await openImap(acc), key };
+      e.client.on("close", () => { if (pool.get(acc.id) === e) pool.delete(acc.id); });
+      pool.set(acc.id, e); return e;
+    })().finally(() => connecting.delete(acc.id));
+    connecting.set(acc.id, p);
+  }
+  const e = await p; touch(acc.id, e); return e;
+}
+const connDead = (err: unknown) => { const x = err as { code?: string; message?: string }; return ["NoConnection", "ECONNRESET", "EPIPE", "ETIMEDOUT"].includes(x?.code ?? "") || /connection (not available|closed)|socket (closed|hang up)/i.test(x?.message ?? ""); };
+
+async function withImap<T>(acc: Account, fn: (c: ImapFlow) => Promise<T>, o: { fresh?: boolean } = {}): Promise<T> {
+  if (o.fresh) { const c = await openImap(acc); try { return await fn(c); } finally { await c.logout().catch(() => c.close()); } } // tareas largas y pruebas: conexión propia
+  for (let attempt = 0; ; attempt++) {
+    const e = await pooled(acc);
+    try { const r = await fn(e.client); touch(acc.id, e); return r; }
+    catch (err) {
+      // la conexión estaba caída (el servidor la cerró por inactividad): se reconecta y se repite UNA vez
+      if (attempt === 0 && connDead(err) && !e.client.usable) { dropConnection(acc.id); continue; }
+      throw err;
+    }
+  }
+}
+const withFresh = <T>(acc: Account, fn: (c: ImapFlow) => Promise<T>) => withImap(acc, fn, { fresh: true });
+
+// ---------- caché de carpetas (contar no leídos de TODAS las carpetas son muchas consultas) ----------
+interface FolderInfo { path: string; name: string; specialUse: string | null; total: number; unread: number }
+const FOLDER_TTL_MS = 15_000;
+const folderCache = new Map<string, { at: number; data?: FolderInfo[]; p?: Promise<FolderInfo[]> }>();
+export const invalidateFolders = (accId: string) => { folderCache.delete(accId); };
+/** Como withImap, pero para acciones que cambian carpetas o contadores: invalida la caché al terminar. */
+const withWrite = <T>(acc: Account, fn: (c: ImapFlow) => Promise<T>) => withImap(acc, fn).finally(() => invalidateFolders(acc.id));
 
 const addr = (l?: { name?: string; address?: string }[]) =>
   (l ?? []).map((a) => (a.name ? `${a.name} <${a.address}>` : a.address ?? "")).join(", ");
 
 export async function testConnection(acc: Account) {
-  await withImap(acc, async (c) => { await c.mailboxOpen("INBOX"); });
+  await withFresh(acc, async (c) => { await c.mailboxOpen("INBOX"); }); // la prueba de conexión usa una conexión nueva: debe comprobar las credenciales de verdad
   await (await smtp(acc)).verify();
 }
 
-export async function listFolders(acc: Account) {
-  return withImap(acc, async (c) => {
+export async function listFolders(acc: Account): Promise<FolderInfo[]> {
+  const hit = folderCache.get(acc.id);
+  if (hit?.data && Date.now() - hit.at < FOLDER_TTL_MS) return hit.data;
+  if (hit?.p) return hit.p; // ya hay una consulta en curso: se comparte
+  const p = withImap(acc, async (c) => {
     const boxes = await c.list({ statusQuery: { messages: true, unseen: true } });
     return boxes.map((b) => ({ path: b.path, name: b.name, specialUse: b.specialUse ?? null, total: b.status?.messages ?? 0, unread: b.status?.unseen ?? 0 }));
-  });
+  }).then((data) => { folderCache.set(acc.id, { at: Date.now(), data }); return data; }, (e) => { folderCache.delete(acc.id); throw e; });
+  folderCache.set(acc.id, { at: 0, p });
+  return p;
 }
 
-async function fetchSummaries(c: ImapFlow, uids: number[]): Promise<Summary[]> {
-  if (!uids.length) return [];
+/** `range`: lista de UIDs, o un rango de números de secuencia ("120:160") para traer solo la página que se ve. */
+async function fetchSummaries(c: ImapFlow, range: number[] | string): Promise<Summary[]> {
+  if (Array.isArray(range) && !range.length) return [];
   const out: Summary[] = [];
-  for await (const m of c.fetch(uids, { uid: true, envelope: true, flags: true, bodyStructure: true }, { uid: true })) {
+  for await (const m of c.fetch(range, { uid: true, envelope: true, flags: true, bodyStructure: true }, Array.isArray(range) ? { uid: true } : undefined)) {
     const flags = m.flags ?? new Set<string>();
     out.push({
       uid: m.uid, subject: m.envelope?.subject ?? "(sin asunto)",
@@ -72,12 +130,18 @@ async function fetchSummaries(c: ImapFlow, uids: number[]): Promise<Summary[]> {
 export async function listMessages(acc: Account, folder = "INBOX", opts: { limit?: number; offset?: number; unread?: boolean } = {}) {
   const limit = Math.min(opts.limit ?? 25, 100), offset = opts.offset ?? 0;
   return withImap(acc, async (c) => {
+    const reused = !!c.mailbox && c.mailbox.path === folder; // carpeta ya abierta en esta conexión: su recuento puede estar desfasado
     const lock = await c.getMailboxLock(folder);
     try {
-      const found = (await c.search(opts.unread ? { seen: false } : { all: true }, { uid: true })) || [];
-      const sorted = found.sort((a, b) => b - a);
-      const page = sorted.slice(offset, offset + limit);
-      return { total: sorted.length, messages: await fetchSummaries(c, page) };
+      if (reused) await c.noop(); // el servidor avisa del correo nuevo o borrado desde otros dispositivos (1 viaje, mucho más barato que releer todo)
+      if (opts.unread) {
+        const sorted = ((await c.search({ seen: false }, { uid: true })) || []).sort((a, b) => b - a);
+        return { total: sorted.length, messages: await fetchSummaries(c, sorted.slice(offset, offset + limit)) };
+      }
+      // sin filtro: se piden solo los mensajes de esta página por número de secuencia (un único comando, sin listar todo el buzón)
+      const total = (c.mailbox && c.mailbox.exists) || 0, hi = total - offset;
+      if (hi < 1) return { total, messages: [] };
+      return { total, messages: await fetchSummaries(c, `${Math.max(1, hi - limit + 1)}:${hi}`) };
     } finally { lock.release(); }
   });
 }
@@ -114,7 +178,7 @@ async function fetchParsed(c: ImapFlow, uid: number): Promise<ParsedMail> {
 }
 
 export async function getMessage(acc: Account, folder: string, uid: number, markRead = true): Promise<FullMessage> {
-  return withImap(acc, async (c) => {
+  return (markRead ? withWrite : withImap)(acc, async (c) => {
     const lock = await c.getMailboxLock(folder);
     try {
       const p = await fetchParsed(c, uid);
@@ -145,7 +209,7 @@ export async function getAttachment(acc: Account, folder: string, uid: number, i
 }
 
 export async function setFlags(acc: Account, folder: string, uid: number, o: { read?: boolean; starred?: boolean }) {
-  return withImap(acc, async (c) => {
+  return withWrite(acc, async (c) => {
     const lock = await c.getMailboxLock(folder);
     try {
       const f = { uid: true };
@@ -158,7 +222,7 @@ export async function setFlags(acc: Account, folder: string, uid: number, o: { r
 }
 
 export async function moveMessage(acc: Account, folder: string, uid: number, dest: string) {
-  return withImap(acc, async (c) => {
+  return withWrite(acc, async (c) => {
     const lock = await c.getMailboxLock(folder);
     try { await c.messageMove(String(uid), dest, { uid: true }); } finally { lock.release(); }
   });
@@ -166,7 +230,7 @@ export async function moveMessage(acc: Account, folder: string, uid: number, des
 
 /** Mueve a la papelera (carpeta con specialUse \Trash); no borra definitivamente. */
 export async function trashMessage(acc: Account, folder: string, uid: number) {
-  return withImap(acc, async (c) => {
+  return withWrite(acc, async (c) => {
     const trash = (await c.list()).find((b) => b.specialUse === "\\Trash");
     if (!trash) throw new Error("No se encontró carpeta de papelera");
     const lock = await c.getMailboxLock(folder);
@@ -192,7 +256,7 @@ function toRaw(from: string, m: Outgoing & { messageId?: string }): Promise<Buff
 /** Guarda un mensaje como borrador en la carpeta Drafts del servidor. */
 export async function saveDraft(acc: Account, m: Partial<Outgoing>) {
   const raw = await toRaw(acc.email, { to: m.to ?? "", subject: m.subject ?? "", text: m.text ?? "", cc: m.cc, attachments: m.attachments, inReplyTo: m.inReplyTo });
-  return withImap(acc, async (c) => {
+  return withWrite(acc, async (c) => {
     const f = await findFolder(c, "\\Drafts", /draft|borrador/i);
     if (!f) throw new Error("No se encontró carpeta de borradores");
     await c.append(f, raw, ["\\Draft", "\\Seen"]);
@@ -211,14 +275,14 @@ export async function sendMessage(acc: Account, m: Outgoing) {
   if (!/gmail|googlemail/i.test(acc.smtp.host)) {
     try {
       const raw = await toRaw(acc.email, full);
-      await withImap(acc, async (c) => { const f = await findFolder(c, "\\Sent", /sent|enviado/i); if (f) { await c.append(f, raw, ["\\Seen"]); sentCopy = true; } });
+      await withWrite(acc, async (c) => { const f = await findFolder(c, "\\Sent", /sent|enviado/i); if (f) { await c.append(f, raw, ["\\Seen"]); sentCopy = true; } });
     } catch { /* no bloquea el envío */ }
   }
   return { messageId: info.messageId, accepted: info.accepted, rejected: info.rejected, sentCopy };
 }
 
 export async function archiveMessage(acc: Account, folder: string, uid: number) {
-  return withImap(acc, async (c) => {
+  return withWrite(acc, async (c) => {
     const dest = await findFolder(c, "\\Archive", /^archive$|archivo/i) ?? await findFolder(c, "\\All", /all mail|todos/i);
     if (!dest) { await c.mailboxCreate("Archive"); }
     const lock = await c.getMailboxLock(folder);
@@ -227,7 +291,7 @@ export async function archiveMessage(acc: Account, folder: string, uid: number) 
 }
 
 export async function spamMessage(acc: Account, folder: string, uid: number) {
-  return withImap(acc, async (c) => {
+  return withWrite(acc, async (c) => {
     const dest = await findFolder(c, "\\Junk", /junk|spam|no deseado/i);
     if (!dest) throw new Error("No se encontró carpeta de spam");
     const lock = await c.getMailboxLock(folder);
@@ -236,7 +300,7 @@ export async function spamMessage(acc: Account, folder: string, uid: number) {
 }
 
 export async function createFolder(acc: Account, name: string) {
-  return withImap(acc, async (c) => { await c.mailboxCreate(name); return { path: name }; });
+  return withWrite(acc, async (c) => { await c.mailboxCreate(name); return { path: name }; });
 }
 
 /** Construye la respuesta (cita + cabeceras de hilo) sin enviarla. */
@@ -267,7 +331,7 @@ export async function eachSource(
   o: { before?: Date; batch?: number; onTotal?: (n: number) => void; onDeleted?: (n: number) => void; cancelled?: () => boolean },
   fn: (items: SourceItem[]) => Promise<number[] | void>,
 ) {
-  return withImap(acc, async (c) => {
+  return withFresh(acc, async (c) => {
     const lock = await c.getMailboxLock(folder);
     try {
       const uids = ((await c.search(o.before ? { before: o.before } : { all: true }, { uid: true })) || []).sort((a, b) => a - b);

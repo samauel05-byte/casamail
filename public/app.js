@@ -121,7 +121,7 @@ async function init() {
   if (!S.acct || (S.acct !== '*' && S.acct !== LOCAL && !accs.find(a => a.id === S.acct))) S.acct = accs.length > 1 ? '*' : accs.length ? accs[0].id : LOCAL;
   if (S.acct === LOCAL && !hasLocal && accs.length) S.acct = accs.length > 1 ? '*' : accs[0].id;
   S.macct = ''; S.folder = 'INBOX'; S.cur = null; resetView();
-  await folders(); await list(); outboxCount();
+  S.foldersAt = 0; await Promise.all([list(), folders(true)]); outboxCount();
 }
 function renderWelcome() {
   $('#list').innerHTML = '';
@@ -140,7 +140,7 @@ function resetView() {
 /* ---------- barra lateral ---------- */
 const FOLDER = { '\\Inbox': ['inbox', 'Recibidos'], '\\Sent': ['send', 'Enviados'], '\\Drafts': ['file', 'Borradores'], '\\Trash': ['trash', 'Papelera'], '\\Junk': ['spam', 'Spam'], '\\Archive': ['archive', 'Archivo'], '\\All': ['archive', 'Todos'], '\\Flagged': ['star', 'Destacados'] };
 const folderMeta = f => FOLDER[f.specialUse] || (f.path === 'INBOX' ? FOLDER['\\Inbox'] : ['folder', f.name]);
-async function folders() {
+async function folders(force) {
   let h = `<button class="btn btn-primary compose-btn" id="new">${I('pencil')} Redactar</button>`;
   h += `<div class="acct-pick"><select id="acct" aria-label="Cuenta">${S.accounts.length > 1 ? '<option value="*">Todas las cuentas</option>' : ''}${S.accounts.map(a => `<option value="${esc(a.id)}">${esc(a.email)}</option>`).join('')}<option value="${LOCAL}">Archivo local (en tu disco)</option></select></div>`;
   const tail = `<div class="side-sep"></div><div class="nav" data-sched="1">${I('send')}<span>Salida</span><span class="n pill" id="outn" hidden></span></div>${S.acct !== '*' && S.acct !== LOCAL ? `<div class="nav" data-newf="1">${I('plus')}<span>Nueva carpeta</span></div>` : ''}<div class="nav" id="jobchip" data-jobs="1" hidden>${I('hdd')}<span id="jobtxt">Tarea en curso</span></div>
@@ -157,7 +157,8 @@ async function folders() {
   }
   else {
     try {
-      const f = await api('/api/folders?account=' + encodeURIComponent(S.acct)); S.folders = f;
+      const reuse = !force && S.foldersAcct === S.acct && Date.now() - S.foldersAt < 60000 && S.folders.length; // contar no leídos de todas las carpetas es lo más lento: no repetirlo en cada clic
+      const f = reuse ? S.folders : await api('/api/folders?account=' + encodeURIComponent(S.acct)); S.folders = f; if (!reuse) { S.foldersAcct = S.acct; S.foldersAt = Date.now(); }
       const order = ['\\Inbox', '\\Flagged', '\\Sent', '\\Drafts', '\\Archive', '\\Junk', '\\Trash'];
       const sorted = [...f].sort((a, b) => { const x = order.indexOf(a.specialUse ?? (a.path === 'INBOX' ? '\\Inbox' : '')), y = order.indexOf(b.specialUse ?? (b.path === 'INBOX' ? '\\Inbox' : '')); return (x < 0 ? 99 : x) - (y < 0 ? 99 : y) || a.path.localeCompare(b.path); });
       h += sorted.map(x => { const [ic, nm] = folderMeta(x); return `<div class="nav ${x.path === S.folder ? 'on' : ''}" data-p="${esc(x.path)}">${I(ic)}<span>${esc(nm)}</span>${x.unread ? `<span class="n ${x.path === 'INBOX' ? 'pill' : ''}">${x.unread}</span>` : ''}</div>`; }).join('');
@@ -166,9 +167,19 @@ async function folders() {
   }
   const sel = $('#acct'); if (sel) sel.value = S.acct;
   $('#new').onclick = () => compose();
-  if (sel) sel.onchange = async e => { S.acct = e.target.value; S.macct = ''; S.folder = e.target.value === LOCAL ? '' : 'INBOX'; S.aiq = null; S.cur = null; resetView(); await folders(); await list(); };
+  if (sel) sel.onchange = async e => { S.acct = e.target.value; S.macct = ''; S.folder = e.target.value === LOCAL ? '' : 'INBOX'; S.aiq = null; S.cur = null; resetView(); await Promise.all([list(), folders()]); };
   outboxCount();
 }
+/** Actualiza el contador de no leídos de la carpeta abierta sin volver a consultar todas las carpetas al servidor. */
+function bumpUnread(delta) {
+  if (S.acct === '*' || S.acct === LOCAL) return;
+  const f = S.folders.find(x => x.path === S.folder); if (!f) return;
+  f.unread = Math.max(0, (f.unread || 0) + delta);
+  const el = [...$$('#side .nav[data-p]')].find(n => n.dataset.p === f.path); if (!el) return;
+  let n = el.querySelector('.n');
+  if (f.unread) { if (!n) { n = document.createElement('span'); el.appendChild(n); } n.className = 'n' + (f.path === 'INBOX' ? ' pill' : ''); n.textContent = f.unread; } else if (n) n.remove();
+}
+const warmAi = () => { if (S.aiOk) api('/api/ai/warmup', {}).catch(() => {}); };
 async function outboxCount() {
   try { const l = await api('/api/outbox'), el = $('#outn'); if (el) { el.hidden = !l.length; el.textContent = l.length; } } catch { /* sin servidor */ }
 }
@@ -227,7 +238,7 @@ function drawList() {
 function bindListHead() {
   $$('.seg button').forEach(b => b.onclick = () => { S.filter = b.dataset.f; list(); });
   const ft = $('#ft'); if (ft) ft.onclick = () => { S.thread = !S.thread; drawList(); };
-  const rf = $('#frf'); if (rf) rf.onclick = () => { folders(); list(); };
+  const rf = $('#frf'); if (rf) rf.onclick = () => { folders(true); list(); };
   const tr = $('#ftri'); if (tr) tr.onclick = async e => {
     if (!needAi()) return; const b = e.currentTarget; busy(b, true); b.innerHTML = `${I('sparkles', 'sm')} Analizando…`;
     try {
@@ -250,7 +261,8 @@ async function rowAct(kind, uid, acct) {
   try {
     if (kind === 'star') { const m = S.msgs.find(x => x.uid === uid && (x.account || '') === (acct || '')); const next = !(m && m.starred); await api(`/api/message/${uid}/flags?${q}`, { starred: next }); if (m) m.starred = next; drawList(); return; }
     await api(`/api/message/${uid}/${kind}?${q}`, {}); toast(kind === 'archive' ? 'Archivado' : 'Movido a la papelera');
-    S.msgs = S.msgs.filter(x => !(x.uid === uid && (x.account || '') === (acct || ''))); if (S.cur && S.cur.uid === uid) { S.cur = null; resetView(); } drawList(); folders();
+    if (S.msgs.find(x => x.uid === uid && (x.account || '') === (acct || ''))?.unread) bumpUnread(-1);
+    S.msgs = S.msgs.filter(x => !(x.uid === uid && (x.account || '') === (acct || ''))); if (S.cur && S.cur.uid === uid) { S.cur = null; resetView(); } drawList();
   } catch (e) { fail(e); }
 }
 
@@ -260,7 +272,7 @@ async function openMsg(uid, acct) {
   $$('.m').forEach(e => e.classList.toggle('on', e.dataset.u == uid && (e.dataset.a || '') === (S.macct || e.dataset.a || ''))); $('#main').classList.add('reading');
   $('#view').innerHTML = `<div class="vbody"><div class="sk" style="padding:0"><i class="a"></i><div><i class="l1"></i><i class="l2"></i></div></div></div>`;
   const m = await api(`/api/message/${uid}?${qs()}`); S.cur = m; S.images = false; renderMsg();
-  const row = S.msgs.find(x => x.uid === uid && (x.account || '') === (S.macct || x.account || '')); if (row && row.unread) { row.unread = false; const el = $(`.m[data-u="${uid}"]`); if (el) el.classList.remove('unread'); folders(); }
+  const row = S.msgs.find(x => x.uid === uid && (x.account || '') === (S.macct || x.account || '')); if (row && row.unread) { row.unread = false; const el = $(`.m[data-u="${uid}"]`); if (el) el.classList.remove('unread'); bumpUnread(-1); }
 }
 const tb = (id, ic, label, cls = '') => `<button class="iconbtn ${cls}" id="${id}" title="${label}" aria-label="${label}">${I(ic)}</button>`;
 function renderMsg() {
@@ -304,8 +316,8 @@ function toggleStar() {
 async function act(kind, body, msg, remove) {
   try {
     await api(`/api/message/${S.cur.uid}/${kind}?${qs()}`, body); toast(msg);
-    if (remove) { const u = S.cur.uid; S.msgs = S.msgs.filter(x => x.uid !== u); S.cur = null; resetView(); drawList(); }
-    folders();
+    if (remove) { const u = S.cur.uid; if (S.msgs.find(x => x.uid === u)?.unread) bumpUnread(-1); S.msgs = S.msgs.filter(x => x.uid !== u); S.cur = null; resetView(); drawList(); }
+    if (kind === 'flags' && body.read === false) bumpUnread(1);
   } catch (e) { fail(e); }
 }
 function snoozeDialog() {
@@ -341,7 +353,7 @@ let ct; $('#to').oninput = e => { clearTimeout(ct); ct = setTimeout(async () => 
 $('#files').onchange = async e => { for (const f of e.target.files) { if (f.size > 20e6) { toast(f.name + ' supera 20 MB', { kind: 'bad' }); continue; } S.files.push({ filename: f.name, encoding: 'base64', content: await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result.split(',')[1]); fr.readAsDataURL(f); }) }); } e.target.value = ''; renderFiles(); };
 $('#sched').onclick = () => { const w = $('#when'); w.hidden = !w.hidden; if (!w.value) w.value = new Date(Date.now() + 36e5 - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 16); };
 $('#from').onchange = () => { /* la firma sigue la cuenta si el cuerpo no se ha tocado */ };
-$('#aitog').onclick = () => { if (!needAi()) return; $('#aibox').hidden = !$('#aibox').hidden; if (!$('#aibox').hidden) $('#aiins').focus(); };
+$('#aitog').onclick = () => { if (!needAi()) return; warmAi(); $('#aibox').hidden = !$('#aibox').hidden; if (!$('#aibox').hidden) $('#aiins').focus(); };
 $('#aigo').onclick = async e => {
   const ins = $('#aiins').value.trim(); if (!ins) return; busy(e.currentTarget, true); $('#aist').textContent = 'Redactando…';
   try { const r = await api('/api/ai/draft?account=' + encodeURIComponent(A()), { instruction: ins, tone: $('#aitone').value, uid: S.reply && S.cur ? S.cur.uid : undefined, folder: S.folder }); if (r.subject && !S.reply) $('#sub').value = r.subject; const sg = sigFor($('#from').value); $('#body').value = r.body + (sg ? `\n\n-- \n${sg}` : ''); $('#aist').textContent = 'Listo. Revísalo antes de enviar.'; }
@@ -375,7 +387,7 @@ $('#sendnow').onclick = () => { if (confirm('Se enviará ahora mismo y ya no pod
 /* ---------- IA ---------- */
 function needAi() { if (S.aiOk) return true; toast('Yerleny necesita un modelo de IA para pensar. Conéctalo en Ajustes (puede ser gratis y local con Ollama).', { action: 'Conectar', onAction: () => settings('ia'), ms: 12000 }); return false; }
 const SUGG = ['Dame mi resumen del día', 'Resume mis correos sin leer', '¿Qué facturas me llegaron?', 'Busca lo último de mi jefe', 'Prepara una respuesta amable al último mensaje'];
-function drawerOpen() { $('#drawer').hidden = false; if (!$('#chat').children.length) chatIntro(); $('#ci').focus(); }
+function drawerOpen() { warmAi(); $('#drawer').hidden = false; if (!$('#chat').children.length) chatIntro(); $('#ci').focus(); }
 function chatIntro() {
   const n = S.yer.userName ? ', ' + S.yer.userName : '';
   $('#chat').innerHTML = `<div class="bub bot">¡Hola${esc(n)}! Soy <b>Yerleny</b>, la IA de CasaMail. Puedo buscar y leer tu correo para responderte, resumirlo y preparar borradores que tú revisas y envías. ¿Qué necesitas?</div><div class="sug">${SUGG.map(s => `<button>${esc(s)}</button>`).join('')}</div>`;
@@ -749,6 +761,6 @@ document.addEventListener('keydown', e => {
   else if (S.cur && e.key === 'r') compose({ reply: { all: false } }); else if (S.cur && e.key === 'e') act('archive', {}, 'Archivado', 1); else if (S.cur && e.key === '#') act('trash', {}, 'Movido a la papelera', 1); else if (S.cur && e.key === 's') toggleStar();
   else if (e.key === '?') toast('C redactar · / buscar · J/K moverse · R responder · E archivar · # papelera · S destacar · Ctrl+K comandos', { ms: 7000 });
 });
-setInterval(() => { if (document.visibilityState === 'visible' && S.acct && !S.aiq && $('#compose').hidden && $('#modal').hidden) { const sel = S.cur ? S.cur.uid : null; list().then(() => { if (sel) $$('.m').forEach(e => e.classList.toggle('on', e.dataset.u == sel)); }); folders(); } }, 120000);
+setInterval(() => { if (document.visibilityState === 'visible' && S.acct && !S.aiq && $('#compose').hidden && $('#modal').hidden) { const sel = S.cur ? S.cur.uid : null; list().then(() => { if (sel) $$('.m').forEach(e => e.classList.toggle('on', e.dataset.u == sel)); }); folders(true); } }, 120000);
 setInterval(outboxCount, 30000);
 init().catch(e => { $('#list').innerHTML = `<div class="empty"><h3>Error</h3><p>${esc(e.message)}</p></div>`; });
