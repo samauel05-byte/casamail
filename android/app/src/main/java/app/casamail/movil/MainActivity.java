@@ -44,15 +44,35 @@ public class MainActivity extends Activity {
     private static final String PREFS = "casamail";
     private static final int REQ_FILE = 7;
 
+    /** true mientras la app está en pantalla: entonces los avisos se ven dentro y no se duplican como notificaciones. */
+    static volatile boolean visible;
+    private String pendingUid, pendingAccount; // mensaje que abrir al tocar una notificación
     private SharedPreferences prefs;
     private LinearLayout root;
     private WebView web;
     private ValueCallback<Uri[]> fileCallback;
     private int pad;
 
+    @Override protected void onStart() { super.onStart(); visible = true; }
+    @Override protected void onStop() { visible = false; super.onStop(); }
+    @Override protected void onNewIntent(Intent i) { super.onNewIntent(i); setIntent(i); leerExtras(i); abrirPendiente(); }
+
+    private void leerExtras(Intent i) {
+        long uid = i == null ? 0 : i.getLongExtra("uid", 0); String acc = i == null ? null : i.getStringExtra("account");
+        // solo se aceptan valores con forma de identificador: se insertan en una llamada JavaScript
+        if (uid > 0 && acc != null && acc.matches("[A-Za-z0-9_.@-]{1,100}")) { pendingUid = String.valueOf(uid); pendingAccount = acc; }
+    }
+    private void abrirPendiente() {
+        if (web == null || pendingUid == null) return;
+        final String js = "if (typeof openFromNotif === 'function') openFromNotif({uid:" + pendingUid + ",account:'" + pendingAccount + "'});";
+        pendingUid = null; pendingAccount = null;
+        web.evaluateJavascript(js, null);
+    }
+
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
+        leerExtras(getIntent());
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         pad = dp(16);
         root = new LinearLayout(this);
@@ -118,6 +138,10 @@ public class MainActivity extends Activity {
 
     // ---------- navegador integrado ----------
     private void openWeb(String server, String token) {
+        Notifs.canales(this);
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 21);   // Android 13+: hay que pedir permiso para avisar
+        AvisosJob.programar(this);
         root.removeAllViews();
         web = new WebView(this);
         root.addView(web, new LinearLayout.LayoutParams(-1, -1));
@@ -142,6 +166,11 @@ public class MainActivity extends Activity {
                     try { startActivity(new Intent(Intent.ACTION_VIEW, u)); } catch (ActivityNotFoundException ignored) { }
                 }
                 return true;
+            }
+            @Override public void onPageFinished(WebView v, String url) {
+                if (!sameOrigin(Uri.parse(url), origin)) return;
+                v.evaluateJavascript("window.casamailAndroid=true;", null);   // la interfaz lo usa para explicar cómo llegan los avisos
+                abrirPendiente();
             }
             @Override public void onReceivedError(WebView v, WebResourceRequest r, WebResourceError e) {
                 if (r.isForMainFrame()) fail("No se pudo conectar con " + origin + ". Comprueba que CasaMail está encendido en tu PC y que el túnel/HTTPS está activo.");

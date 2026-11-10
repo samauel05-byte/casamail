@@ -9,6 +9,7 @@
 - **En el teléfono** la app guarda la dirección de tu servidor y la clave de acceso, en el almacenamiento privado de la app. No se incluyen en copias de seguridad en la nube.
 - **Conexiones**: la app de Android solo se conecta a la dirección HTTPS que tú indiques. CasaMail se conecta a tus proveedores de correo (IMAP/SMTP, Gmail, Outlook) y, si lo activas, a los motores de IA que elijas.
 - **IA (Yerleny)**: si usas un motor de IA en la nube, el texto de los mensajes que le pides resumir o redactar se envía a ese proveedor, con sus propias condiciones. Con un modelo local, nada sale de tu equipo.
+- **Avisos y calendario**: el historial de avisos y tus reuniones se guardan solo en tu equipo o servidor. Si activas el resumen de avisos con un motor de IA en la nube, el texto de los correos nuevos se envía a ese proveedor; puedes desactivarlo en Ajustes → Avisos. En Android, la app guarda además las alarmas de recordatorio en el teléfono.
 - **Registro de errores** (escritorio): se guarda en tu equipo, sin contraseñas, claves ni direcciones de correo.
 
 ## Lo que no hacemos

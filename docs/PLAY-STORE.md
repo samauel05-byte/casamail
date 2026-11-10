@@ -34,6 +34,7 @@ CasaMail es un cliente de correo propio: tu correo vive en tu equipo, no en la n
 
 • Todas tus cuentas en un solo lugar: IMAP/SMTP, Gmail y Outlook (OAuth).
 • Yerleny, la IA de CasaMail: resume mensajes, sugiere respuestas, redacta borradores y te prepara un resumen del día. Nunca envía nada sin que tú lo confirmes.
+• Avisos: cada correo nuevo con un resumen de lo que dice, reuniones detectadas para agendar y recordatorios antes de cada una.
 • Retira un envío durante 10 minutos antes de que salga.
 • Archivo local sin límite de capacidad: importa y exporta PST y MBOX.
 • Privacidad: sin publicidad, sin rastreadores, sin cuentas propias. La app no guarda tu correo en el teléfono.
@@ -42,6 +43,12 @@ IMPORTANTE: necesitas tener CasaMail instalado y accesible por HTTPS (por ejempl
 ```
 
 **Categoría:** Productividad · **Correo de contacto:** el tuyo · **Política de privacidad:** `https://github.com/samauel05-byte/casamail/blob/main/docs/PRIVACIDAD.md`
+
+## Permisos de la app (por si Google pregunta)
+- `INTERNET`: conectar con el servidor del propio usuario.
+- `POST_NOTIFICATIONS`: mostrar avisos de correo nuevo y recordatorios de reuniones.
+- `RECEIVE_BOOT_COMPLETED`: que la consulta de avisos (tarea periódica) siga programada tras reiniciar el móvil.
+No usa alarmas exactas, servicios en primer plano, ubicación, contactos ni almacenamiento.
 
 ## Formulario "Seguridad de los datos" (respuestas sugeridas)
 - ¿Recopila o comparte datos del usuario? **No** (la app no envía datos al desarrollador ni a terceros; solo se comunica con el servidor que el propio usuario configura).

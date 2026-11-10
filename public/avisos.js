@@ -164,7 +164,7 @@ async function tabAvisos(c) {
       ${sw('enabled', 'Activar avisos')}
       <h4>Correo nuevo</h4>
       ${sw('mail', 'Avisar de cada correo nuevo', 'Con el remitente, el asunto y un resumen.')}
-      ${sw('aiSummary', 'Resumen con Yerleny', `Si no hay IA conectada, el aviso muestra el comienzo del texto.${S.aiOk ? '' : ' (Ahora no hay ningún motor de IA conectado.)'}`)}
+      ${sw('aiSummary', 'Resumen con Yerleny', `Si tu motor de IA es de la nube, el texto de cada correo nuevo se envía a ese proveedor para resumirlo; con el modelo local no sale de tu equipo. Sin IA, el aviso muestra el comienzo del texto.${S.aiOk ? '' : ' (Ahora no hay ningún motor de IA conectado.)'}`)}
       <h4>Reuniones</h4>
       ${sw('meetings', 'Detectar reuniones en los correos', 'Invitaciones (.ics) y, con Yerleny, reuniones escritas en el texto. Siempre te pregunta antes de agendar.')}
       ${sw('autoAgenda', 'Agendar solas las invitaciones (.ics)', 'Solo invitaciones con archivo de calendario. Las detectadas por la IA siempre se confirman.')}
