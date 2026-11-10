@@ -188,7 +188,7 @@ check("proveedor gratuito en la nube: enlace para conseguir la clave y aviso de 
 await pg.click("#cadd"); await pg.waitForSelector("#cst:has-text('Pega primero tu clave')");
 check("no deja añadir sin clave", (await engApi()).length === 1);
 if (process.env.UI_LIVE) {
-  await pg.click('[data-cloud="openrouter"]'); await pg.click("#cdet"); await pg.waitForSelector("#cmod option:nth-child(2)", { timeout: 20000 });
+  await pg.click('[data-cloud="openrouter"]'); await pg.click("#cdet"); await pg.waitForSelector("#cmod option:nth-child(2)", { state: "attached", timeout: 20000 });
   const opts = await pg.locator("#cmod option").allTextContents();
   check("EN VIVO: OpenRouter detecta modelos gratuitos y elige uno gratuito con herramientas", opts.some((o) => o.includes(":free · gratis")) && (await pg.inputValue("#cmod")).endsWith(":free"));
 }
