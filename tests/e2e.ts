@@ -3,8 +3,9 @@ import os from "node:os";
 import path from "node:path";
 process.env.CASAMAIL_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "casamail-"));
 process.env.CASAMAIL_ARCHIVE = path.join(process.env.CASAMAIL_HOME, "archive");
+process.env.CASAMAIL_IMAP_IDLE_MS = "1500"; // la conexión reutilizada se cierra tras 1,5 s sin uso (para poder probarlo)
 process.env.CASAMAIL_OAUTH_MOCK = "http://127.0.0.1:1300";
-const { startImap, startSmtp, startFakeAi, sentMails, startMockOAuth, oauth: mock, lastSystem } = await import("./servers.js");
+const { startImap, startSmtp, startFakeAi, sentMails, startMockOAuth, oauth: mock, lastSystem, fakeStats } = await import("./servers.js");
 const store = await import("../src/store.js");
 const mail = await import("../src/mail.js");
 const ai = await import("../src/ai.js");
@@ -323,17 +324,17 @@ await t("el proveedor devolvió error (usuario canceló): se informa", async () 
 await t("IMAP con XOAUTH2 (token de la cuenta)", async () => { const f = await mail.listFolders(get()); ok(f.some((x) => x.path === "INBOX"), "INBOX"); });
 await t("SMTP con XOAUTH2 envía de verdad", async () => { const n = sentMails.length; const r = await mail.sendMessage(get(), { to: "x@y.com", subject: "Por OAuth", text: "hola" }); eq(r.accepted.length, 1); eq(sentMails.length, n + 1); });
 await t("token caducado: se renueva solo y el correo sigue funcionando", async () => {
-  const c0 = mock.refreshCalls, old = get().oauth!.accessToken; expire();
+  const c0 = mock.refreshCalls, old = get().oauth!.accessToken; expire(); mail.dropConnection("t"); // el token se usa al (re)conectar
   ok((await mail.listMessages(get(), "INBOX")).total >= 0, "lista"); eq(mock.refreshCalls, c0 + 1, "una renovación");
   ok(get().oauth!.accessToken !== old && get().oauth!.expiresAt! > Date.now(), "token nuevo guardado");
 });
 await t("sin caducar no se renueva (reutiliza el token)", async () => { const c0 = mock.refreshCalls; await mail.listFolders(get()); await mail.listFolders(get()); eq(mock.refreshCalls, c0); });
 await t("5 operaciones simultáneas con token caducado: 1 sola renovación", async () => {
-  const c0 = mock.refreshCalls; expire(); await Promise.all([1, 2, 3, 4, 5].map(() => mail.listFolders(get()))); eq(mock.refreshCalls, c0 + 1);
+  const c0 = mock.refreshCalls; expire(); mail.dropConnection("t"); mail.invalidateFolders("t"); await Promise.all([1, 2, 3, 4, 5].map(() => mail.listFolders(get()))); eq(mock.refreshCalls, c0 + 1);
 });
 await t("rotación del refresh token (estilo Microsoft): se guarda el nuevo", async () => {
-  mock.rotate = true; const before = get().oauth!.refreshToken; expire(); await mail.listFolders(get());
-  ok(get().oauth!.refreshToken !== before, "no rotó"); expire(); await mail.listFolders(get()); // el nuevo sigue siendo válido
+  mock.rotate = true; const before = get().oauth!.refreshToken; expire(); mail.dropConnection("t"); mail.invalidateFolders("t"); await mail.listFolders(get());
+  ok(get().oauth!.refreshToken !== before, "no rotó"); expire(); mail.dropConnection("t"); mail.invalidateFolders("t"); await mail.listFolders(get()); // el nuevo sigue siendo válido
   mock.rotate = false;
 });
 await t("reconectar la misma cuenta no la duplica", async () => {
@@ -341,7 +342,7 @@ await t("reconectar la misma cuenta no la duplica", async () => {
   eq(store.loadAccounts().filter((a) => a.email === "yo@casa.test").length, 1);
 });
 await t("autorización revocada: error claro para reconectar (no un fallo críptico)", async () => {
-  mock.revoked.add(get().oauth!.refreshToken); expire(); let e: Error | null = null;
+  mock.revoked.add(get().oauth!.refreshToken); expire(); mail.dropConnection("t"); mail.invalidateFolders("t"); let e: Error | null = null;
   try { await mail.listFolders(get()); } catch (x) { e = x as Error; }
   ok(e?.name === "ReauthError" && /Vuelve a conectarla/.test(e.message), String(e?.message));
 });
@@ -482,6 +483,119 @@ if (LLM && fs.existsSync(LLM)) {
 } else console.log("  – MODELO REAL: omitidas (define LLM_DIR=/carpeta/con/el/modelo para probarlas)");
 limited.close(); badKey.close(); modelsSrv.close();
 store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });
+
+console.log("\nRendimiento: una conexión reutilizada por cuenta");
+{
+  const net = await import("node:net");
+  const ps = { conns: 0, up: 0, open: new Set<import("node:net").Socket>() };
+  const proxyP = net.createServer((c) => { ps.conns++; ps.open.add(c); c.on("close", () => ps.open.delete(c)); const up = net.connect(1143, "127.0.0.1"); c.on("data", (d) => { ps.up += d.length; up.write(d); }); up.on("data", (d) => c.write(d)); c.on("close", () => up.destroy()); up.on("close", () => c.destroy()); c.on("error", () => up.destroy()); up.on("error", () => c.destroy()); });
+  await new Promise<void>((r) => proxyP.listen(1145, "127.0.0.1", r));
+  const accP = { ...acc, id: "perf", imap: { host: "127.0.0.1", port: 1145, secure: false } };
+  const { ImapFlow } = await import("imapflow");
+  await mail.createFolder(accP, "PerfBox"); mail.dropConnection("perf");
+  const seedC = new ImapFlow({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await seedC.connect();
+  for (let i = 0; i < 7; i++) await seedC.append("PerfBox", Buffer.from(`From: P${i} <p${i}@x.com>\r\nTo: yo@casa.test\r\nSubject: Perf ${i}\r\nDate: Mon, 0${i + 1} Jan 2026 09:00:00 +0000\r\nMessage-ID: <perf${i}@x>\r\n\r\ncuerpo ${i}`), i === 0 ? ["\\Seen"] : []);
+  await seedC.logout();
+  const reset = async () => { mail.dropConnection("perf"); mail.invalidateFolders("perf"); for (let i = 0; i < 40 && ps.open.size; i++) await new Promise((r) => setTimeout(r, 50)); ps.conns = 0; };
+
+  await t("un uso normal (carpetas, bandeja, 3 mensajes, destacar, refrescos) abre UNA sola conexión", async () => {
+    await reset();
+    await mail.listFolders(accP); const l = await mail.listMessages(accP, "PerfBox", { limit: 5 });
+    for (let i = 0; i < 3; i++) await mail.getMessage(accP, "PerfBox", l.messages[i].uid, true);
+    await mail.setFlags(accP, "PerfBox", l.messages[0].uid, { starred: true }); await mail.listFolders(accP); await mail.listMessages(accP, "PerfBox", { limit: 5 });
+    eq(ps.conns, 1, "antes eran 8: una por acción");
+  });
+  await t("10 acciones simultáneas comparten la conexión y todas devuelven lo correcto", async () => {
+    await reset(); const l = await mail.listMessages(accP, "PerfBox", { limit: 7 });
+    const all = await Promise.all(l.messages.concat(l.messages).slice(0, 10).map((m) => mail.getMessage(accP, "PerfBox", m.uid, false)));
+    ok(all.every((m, i) => m.subject === l.messages[i % 7].subject), "cada respuesta debe corresponder a su mensaje"); eq(ps.conns, 1);
+  });
+  await t("la bandeja pide solo la página visible: orden correcto, sin solapes y total exacto", async () => {
+    await reset(); const p1 = await mail.listMessages(accP, "PerfBox", { limit: 3, offset: 0 }), p2 = await mail.listMessages(accP, "PerfBox", { limit: 3, offset: 3 }), p3 = await mail.listMessages(accP, "PerfBox", { limit: 3, offset: 6 }), p4 = await mail.listMessages(accP, "PerfBox", { limit: 3, offset: 99 });
+    eq(p1.total, 7); eq(p1.messages.map((m) => m.subject), ["Perf 6", "Perf 5", "Perf 4"]); eq(p2.messages.map((m) => m.subject), ["Perf 3", "Perf 2", "Perf 1"]); eq(p3.messages.map((m) => m.subject), ["Perf 0"]); eq(p4.messages.length, 0, "más allá del final: vacío");
+    const un = await mail.listMessages(accP, "PerfBox", { limit: 10, unread: true }); ok(un.messages.length >= 1 && un.messages.every((m) => m.unread) && !un.messages.some((m) => m.subject === "Perf 0"), "el filtro de no leídos sigue funcionando (Perf 0 está leído)");
+  });
+  await t("las carpetas se piden una vez (caché) y cualquier cambio la invalida", async () => {
+    await reset(); await mail.listFolders(accP); const b0 = ps.up; await mail.listFolders(accP); await mail.listFolders(accP); eq(ps.up, b0, "dos consultas más NO deben tocar el servidor");
+    const l = await mail.listMessages(accP, "PerfBox", { limit: 1 }); await mail.setFlags(accP, "PerfBox", l.messages[0].uid, { read: true }); const b1 = ps.up; const f = await mail.listFolders(accP); ok(ps.up > b1, "tras un cambio debe volver a consultar");
+    ok(f.find((x) => x.path === "PerfBox")!.unread <= 5, "y el recuento de no leídos se actualiza");
+  });
+  await t("si el servidor cierra la conexión (inactividad), se reconecta solo y la acción sale bien", async () => {
+    await reset(); await mail.listMessages(accP, "PerfBox", { limit: 2 }); eq(ps.conns, 1);
+    for (const sk of ps.open) sk.destroy(); await new Promise((r) => setTimeout(r, 150)); // el servidor/red la cierra
+    const r = await mail.listMessages(accP, "PerfBox", { limit: 2 }); eq(r.messages.length, 2); eq(ps.conns, 2, "una reconexión, sin errores para el usuario");
+  });
+  await t("sin uso, la conexión se cierra sola (no se queda abierta para siempre)", async () => {
+    await reset(); await mail.listMessages(accP, "PerfBox", { limit: 1 }); eq(ps.open.size, 1); await new Promise((r) => setTimeout(r, 2300)); eq(ps.open.size, 0, "debe cerrarse tras el tiempo de inactividad");
+    await mail.listMessages(accP, "PerfBox", { limit: 1 }); eq(ps.conns, 2, "y se vuelve a abrir cuando hace falta");
+  });
+  await t("si cambian las credenciales NO se reutiliza la sesión anterior (se vuelve a autenticar)", async () => {
+    await reset(); await mail.listMessages(accP, "PerfBox", { limit: 1 }); let m = "";
+    try { await mail.listMessages({ ...accP, pass: "contraseña-incorrecta" }, "PerfBox", { limit: 1 }); } catch (e) { m = (e as Error).message; }
+    ok(m.length > 0, "con otra contraseña debe fallar la autenticación, no colarse por la sesión abierta"); eq(ps.conns, 2);
+    for (let i = 0; i < 40 && ps.open.size; i++) await new Promise((r) => setTimeout(r, 50)); eq(ps.open.size, 0, "una autenticación fallida NO debe dejar sockets abiertos (fuga)");
+  });
+  await t("un servidor inalcanzable falla una vez y claro (sin reintentos infinitos)", async () => {
+    const t0 = Date.now(); let m = ""; try { await mail.listMessages({ ...accP, id: "caido", imap: { host: "127.0.0.1", port: 1, secure: false } }, "INBOX"); } catch (e) { m = (e as Error).message; }
+    ok(m.length > 0 && Date.now() - t0 < 5000, m);
+  });
+  await t("el correo nuevo o borrado desde OTRO dispositivo se ve al refrescar (la conexión abierta no sirve una foto vieja)", async () => {
+  await reset(); const before = await mail.listMessages(accP, "PerfBox", { limit: 3 });
+  const other = new ImapFlow({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await other.connect();
+  await other.append("PerfBox", Buffer.from(`From: Nuevo <n@x.com>\r\nTo: yo@casa.test\r\nSubject: Llegó ahora\r\nDate: Sat, 01 Feb 2026 09:00:00 +0000\r\nMessage-ID: <nuevo@x>\r\n\r\nhola`), []); await other.logout();
+  mail.dropConnection("perf"); // (el IMAP de pruebas no avisa a otras sesiones; un servidor real lo hace con el NOOP que ya se envía)
+  const after = await mail.listMessages(accP, "PerfBox", { limit: 3 }); eq(after.total, before.total + 1); eq(after.messages[0].subject, "Llegó ahora");
+});
+await t("las tareas largas (descargar un buzón) usan su propia conexión y no cortan la de la interfaz", async () => {
+    await reset(); await mail.listMessages(accP, "PerfBox", { limit: 1 }); const f = path.join(os.tmpdir(), `cm-perf-${Date.now()}.mbox`); const out = fs.createWriteStream(f);
+    eq(await mail.exportFolderMbox(accP, "PerfBox", out), 8); out.end(); await new Promise((r) => out.on("finish", r)); fs.unlinkSync(f);
+    eq(ps.conns, 2, "una para la interfaz y una para la descarga"); await mail.listMessages(accP, "PerfBox", { limit: 1 }); eq(ps.conns, 2, "la de la interfaz seguía viva");
+  });
+  await t("quitar una cuenta cierra su conexión", async () => { await reset(); await mail.listMessages(accP, "PerfBox", { limit: 1 }); eq(ps.open.size, 1); mail.dropConnection("perf"); await new Promise((r) => setTimeout(r, 200)); eq(ps.open.size, 0); });
+  mail.closeConnections(); proxyP.close();
+}
+
+console.log("\nCorreos del asistente: tu firma, y nunca decir que envió algo");
+store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });
+const hostNoop = { search: async () => ({ total: 0, messages: [] }), read: async () => ({}), folders: async () => [] };
+await t("firma: quita 'Yerleny' de los cierres (los correos los firma el usuario) y no toca el resto", async () => {
+  store.saveYerleny({ userName: "Sam", notes: [] });
+  eq(ai.cleanClosing("Hola.\n\nGracias,\nYerleny"), "Hola.\n\nGracias,"); eq(ai.cleanClosing("Hola.\n\n— Yerleny"), "Hola."); eq(ai.cleanClosing("Texto\n\nEnviado por Yerleny, tu IA de CasaMail"), "Texto");
+  eq(ai.cleanClosing("Hola Ana,\n\nTe escribo por el presupuesto.\n\nSaludos"), "Hola Ana,\n\nTe escribo por el presupuesto.\n\nSaludos", "un correo normal no se altera");
+  const largo = ai.cleanClosing("Le comento que Yerleny me ayudó a revisar el presupuesto con todo detalle y está todo correcto, gracias."); ok(!/yerleny/i.test(largo) && largo.includes("Sam"), largo);
+  store.saveYerleny({ notes: [] });
+});
+await t("redactar: aunque el modelo firme como Yerleny, el borrador sale sin esa firma", async () => {
+  const d = await ai.draft({ instruction: "una prueba FIRMA-YERLENY" }); ok(!/yerleny/i.test(d.body) && d.body.includes("Gracias por su tiempo"), d.body); ok(/EN NOMBRE DEL USUARIO/.test(lastSystem.text) && /SIN firma/.test(lastSystem.text), "el prompt lo exige");
+});
+await t("'envíale un correo a x@y': deja un BORRADOR (no envía), con el destinatario correcto y sin firma de Yerleny", async () => {
+  const sent = sentMails.length, tools = fakeStats.toolRequests;
+  const r = await ai.agent([], "enviale un correo a emoreno@portovalencia.com y dime que es una prueba FIRMA-YERLENY", hostNoop);
+  eq(r.drafts.length, 1); eq(r.drafts[0].to, "emoreno@portovalencia.com"); ok(!/yerleny/i.test(r.drafts[0].body) && r.drafts[0].body.length > 10, r.drafts[0].body);
+  ok(/No se ha enviado nada/.test(r.reply), r.reply); eq(sentMails.length, sent, "NO debe enviar"); eq(fakeStats.toolRequests, tools, "no depende de que el modelo use herramientas");
+  eq(r.history.at(-1)!.role, "assistant");
+});
+await t("si el modelo afirma que envió algo, se corrige: Yerleny no puede enviar", async () => {
+  const r = await ai.agent([], "¿lo enviaste? LO-ENVIASTE", hostNoop); ok(/^No he enviado nada/.test(r.reply) && !/se envió correctamente/.test(r.reply), r.reply);
+  eq((r.history.at(-1) as { text: string }).text, r.reply, "el historial tampoco conserva la mentira");
+  for (const t2 of ["Sí, el correo se envió correctamente.", "Ya lo envié.", "He enviado el mensaje a Ana.", "Mensaje enviado con éxito"]) ok(ai.claimsSent(t2), t2);
+  for (const t2 of ["Aquí tienes el borrador.", "Prepárate: no se ha enviado nada.", "Puedes enviarlo cuando quieras."]) ok(!ai.claimsSent(t2), t2);
+});
+await t("'dame mi resumen del día': lee los no leídos y los resume (sin depender de herramientas del modelo)", async () => {
+  const calls: unknown[] = []; const tools = fakeStats.toolRequests;
+  const r = await ai.agent([], "Dame mi resumen del día", { ...hostNoop, search: async (a) => { calls.push(a); return { total: 2, messages: [{ uid: 1, from: "Ana <ana@e.com>", subject: "Presupuesto", date: "2026-11-10T10:00:00Z" }, { uid: 2, from: "Banco <b@x.com>", subject: "Factura", date: null }] }; } });
+  eq((calls[0] as { unread: boolean }).unread, true); ok(/Tienes 2 correos sin leer/.test(r.reply) && r.reply.includes("Resumen"), r.reply); eq(fakeStats.toolRequests, tools);
+});
+await t("resumen del día sin correos nuevos: lo dice sin molestar al modelo", async () => {
+  const n = fakeStats.total; const r = await ai.agent([], "dame mi resumen del día", hostNoop); ok(/No tienes correos sin leer/.test(r.reply), r.reply); eq(fakeStats.total, n, "no debe llamar a la IA");
+});
+await t("el atajo de redactar solo se activa con peticiones de escribir/enviar, no al leer o buscar", async () => {
+  for (const si of ["enviale un correo a emoreno@portovalencia.com y dime que es una prueba", "mándale un mensaje a ana@x.com", "escríbele un email a ana@x.com diciendo hola", "redacta un correo para ana@x.com", "Envía un mail a ana@x.com"]) ok(ai.isComposeRequest(si), "debería: " + si);
+  for (const no of ["busca el correo de ana@empresa.com sobre el presupuesto", "lee el último mensaje de ana@empresa.com", "¿qué me escribió ana@x.com en su correo?", "enviale un correo a Ana", "resume mis correos"]) ok(!ai.isComposeRequest(no), "no debería: " + no);
+  for (const si of ["Dame mi resumen del día", "resume mis correos", "¿qué tengo de nuevo?", "correos sin leer"]) ok(ai.isDailySummary(si), "resumen: " + si);
+  const tools = fakeStats.toolRequests, sent = sentMails.length; await ai.agent([], "busca el correo de ana@empresa.com sobre el presupuesto", hostNoop);
+  ok(fakeStats.toolRequests > tools, "una búsqueda normal usa el asistente con herramientas"); eq(sentMails.length, sent, "y nunca envía");
+});
 
 console.log("\nRegistro de errores (app de escritorio)");
 const { createRequire } = await import("node:module");

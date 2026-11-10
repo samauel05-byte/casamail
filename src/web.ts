@@ -66,7 +66,7 @@ app.post("/api/accounts", h(async (r) => {
   store.addAccount(a);
   return { id: a.id };
 }));
-app.delete("/api/accounts/:id", h(async (r) => { store.removeAccount(r.params.id); return { ok: true }; }));
+app.delete("/api/accounts/:id", h(async (r) => { store.removeAccount(r.params.id); mail.dropConnection(r.params.id); mail.invalidateFolders(r.params.id); return { ok: true }; }));
 app.get("/api/settings", h(async () => store.getSettings()));
 app.post("/api/settings", h(async (r) => {
   const cur = store.getSettings();
@@ -348,6 +348,8 @@ app.post("/api/ai/models", h(async (r) => {
 }));
 // Motor integrado: modelos abiertos que corren en este equipo (gratis, sin cuenta, privado)
 app.get("/api/ai/local", h(async () => localLlm.localStatus()));
+/** Carga el modelo local en segundo plano (el usuario abre Yerleny o el redactor con IA y, mientras escribe, ya se está cargando). */
+app.post("/api/ai/warmup", h(async () => ({ warming: await localLlm.warmup(false) })));
 app.post("/api/ai/local/download", h(async (r) => { await localLlm.startDownload(String(r.body.id)); return localLlm.downloadStatus(); }));
 app.post("/api/ai/local/cancel", h(async () => { localLlm.cancelDownload(); return localLlm.downloadStatus(); }));
 app.delete("/api/ai/local/:id", h(async (r) => { await localLlm.removeModel(r.params.id); return { ok: true }; }));
@@ -399,6 +401,7 @@ export async function startServer(o: { port?: number; fallbackRandom?: boolean; 
   PORT = (server.address() as AddressInfo).port;
   const timer = setInterval(() => tick().catch(() => {}), 10_000); timer.unref();
   tick().catch(() => {});
+  if (!process.env.CASAMAIL_NO_WARMUP) setTimeout(() => localLlm.warmup(true).catch(() => {}), 4000).unref();
   const origin = `http://${HOST}:${PORT}`, url = `${origin}/?t=${TOKEN}`;
   if (!o.quiet) console.log(`\n  CasaMail está corriendo → ${url}\n  (solo accesible desde este equipo)\n`);
   if (o.open) {
@@ -407,7 +410,7 @@ export async function startServer(o: { port?: number; fallbackRandom?: boolean; 
   }
   return {
     port: PORT, url, origin, token: TOKEN, allowImportPath, activeJobs: jobs.activeCount,
-    close: () => new Promise<void>((resolve) => { clearInterval(timer); lock.release(); server.close(() => resolve()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((resolve) => { clearInterval(timer); lock.release(); mail.closeConnections(); server.close(() => resolve()); server.closeAllConnections?.(); }),
   };
 }
 
