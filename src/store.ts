@@ -90,7 +90,7 @@ export function writeJson(name: string, data: unknown) {
   fs.writeFileSync(path.join(dir, name), JSON.stringify(data, null, 2), { mode: 0o600 });
 }
 
-export interface Settings { signatures: Record<string, string>; sendDelayMin?: number }
+export interface Settings { signatures: Record<string, string>; sendDelayMin?: number; archiveDir?: string }
 export const getSettings = (): Settings => readJson("settings.json", { signatures: {} });
 export const saveSettings = (s: Settings) => writeJson("settings.json", s);
 

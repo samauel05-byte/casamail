@@ -5,6 +5,9 @@ import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import crypto from "node:crypto";
 import { learnContacts } from "./store.js";
 import { getAccessToken } from "./oauth.js";
+import { once } from "node:events";
+import type { Writable } from "node:stream";
+import { mboxEntry } from "./mbox.js";
 import type { Account } from "./store.js";
 
 export interface Summary {
@@ -251,4 +254,58 @@ export async function buildReply(acc: Account, folder: string, uid: number, body
 
 export async function replyTo(acc: Account, folder: string, uid: number, body: { text: string; replyAll?: boolean }) {
   return sendMessage(acc, await buildReply(acc, folder, uid, body));
+}
+
+export interface SourceItem { uid: number; source: Buffer; read: boolean; starred: boolean; date: Date | null }
+
+/**
+ * Recorre una carpeta del servidor en lotes, del más antiguo al más nuevo. `fn` recibe cada lote y puede devolver
+ * los UIDs que deben borrarse del servidor (solo se borran DESPUÉS de que `fn` terminó bien con ellos).
+ */
+export async function eachSource(
+  acc: Account, folder: string,
+  o: { before?: Date; batch?: number; onTotal?: (n: number) => void; onDeleted?: (n: number) => void; cancelled?: () => boolean },
+  fn: (items: SourceItem[]) => Promise<number[] | void>,
+) {
+  return withImap(acc, async (c) => {
+    const lock = await c.getMailboxLock(folder);
+    try {
+      const uids = ((await c.search(o.before ? { before: o.before } : { all: true }, { uid: true })) || []).sort((a, b) => a - b);
+      o.onTotal?.(uids.length);
+      const batch = o.batch ?? 10;
+      for (let i = 0; i < uids.length; i += batch) {
+        if (o.cancelled?.()) break;
+        const items: SourceItem[] = [];
+        for await (const m of c.fetch(uids.slice(i, i + batch), { uid: true, source: true, flags: true, internalDate: true }, { uid: true })) {
+          if (!m.source) continue;
+          items.push({ uid: m.uid, source: m.source, read: m.flags?.has("\\Seen") ?? false, starred: m.flags?.has("\\Flagged") ?? false, date: m.internalDate ? new Date(m.internalDate) : null });
+        }
+        const del = await fn(items);
+        if (del?.length) { await c.messageDelete(del, { uid: true }); o.onDeleted?.(del.length); }
+      }
+    } finally { lock.release(); }
+  });
+}
+
+/** Descarga una carpeta del servidor como MBOX (streaming: no se carga en memoria). */
+export async function exportFolderMbox(acc: Account, folder: string, out: Writable, onProgress?: (done: number, total: number) => void) {
+  let total = 0, done = 0;
+  await eachSource(acc, folder, { batch: 10, onTotal: (n) => { total = n; } }, async (items) => {
+    for (const it of items) { if (!out.write(mboxEntry(it.source, it.date))) await once(out, "drain"); done++; }
+    onProgress?.(done, total);
+  });
+  return done;
+}
+
+/** El mensaje completo tal como está en el servidor (RFC 822, para descargarlo como .eml). */
+export async function getSource(acc: Account, folder: string, uid: number): Promise<Buffer> {
+  return withImap(acc, async (c) => {
+    const lock = await c.getMailboxLock(folder);
+    try {
+      const dl = await c.download(String(uid), undefined, { uid: true });
+      if (!dl?.content) throw new Error(`Mensaje ${uid} no encontrado`);
+      const chunks: Buffer[] = []; for await (const ch of dl.content) chunks.push(ch as Buffer);
+      return Buffer.concat(chunks);
+    } finally { lock.release(); }
+  });
 }
