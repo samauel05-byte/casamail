@@ -628,6 +628,38 @@ await t("registro: si no se puede escribir (disco/permisos), NUNCA rompe la app"
   finally { process.env.CASAMAIL_HOME = prev; delete reqCjs.cache[reqCjs.resolve("../electron/log.cjs")]; }
 });
 
+console.log("\nModo remoto (app Android): seguridad");
+{
+  const { spawn } = await import("node:child_process"); const httpm = await import("node:http");
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cm-remote-")); const TOK = "a".repeat(48);
+  const start = (env: Record<string, string>, port: number) => { const p = spawn(process.execPath, ["--import", "tsx", "src/web.ts"], { env: { ...process.env, CASAMAIL_HOME: home, CASAMAIL_ARCHIVE: path.join(home, "archive"), CASAMAIL_TOKEN: TOK, CASAMAIL_NO_OPEN: "1", CASAMAIL_NO_WARMUP: "1", PORT: String(port), ...env }, stdio: "ignore" }); return p; };
+  const get = (port: number, host: string, pathq: string, cookie?: string, bindIp = "127.0.0.1") => new Promise<{ status: number; headers: Record<string, string | string[] | undefined> }>((res, rej) => { const r = httpm.request({ host: bindIp, port, path: pathq, headers: { host, ...(cookie ? { cookie } : {}) } }, (x) => { x.resume(); res({ status: x.statusCode ?? 0, headers: x.headers }); }); r.on("error", rej); r.end(); });
+  const waitUp = async (port: number) => { for (let i = 0; i < 100; i++) { try { await get(port, "localhost", "/"); return; } catch { await new Promise((r) => setTimeout(r, 100)); } } throw new Error("el servidor no arrancó"); };
+
+  const local = start({}, 8091), remote = start({ CASAMAIL_REMOTE: "1", CASAMAIL_ALLOWED_HOSTS: "casa.tail.ts.net, otro.test" }, 8092);
+  try {
+    await waitUp(8091); await waitUp(8092);
+    await t("sin modo remoto: un nombre de host ajeno se rechaza (como siempre)", async () => { eq((await get(8091, "casa.tail.ts.net", "/?t=" + TOK)).status, 403); });
+    await t("modo remoto: un host que no está en la lista se rechaza (anti DNS-rebinding)", async () => { eq((await get(8092, "evil.example", "/?t=" + TOK)).status, 403); });
+    await t("modo remoto: el host permitido con el token entra y recibe cookie Secure+HttpOnly+Strict", async () => {
+      const r = await get(8092, "casa.tail.ts.net", "/?t=" + TOK); eq(r.status, 302); const c = String(r.headers["set-cookie"]);
+      ok(/HttpOnly/.test(c) && /Secure/.test(c) && /SameSite=Strict/.test(c), c);
+    });
+    await t("en local la cookie sigue sin Secure (http://127.0.0.1)", async () => { const c = String((await get(8091, "127.0.0.1", "/?t=" + TOK)).headers["set-cookie"]); ok(/HttpOnly/.test(c) && !/Secure/.test(c), c); });
+    await t("sin token ni cookie no se entra, y la API tampoco", async () => { eq((await get(8092, "casa.tail.ts.net", "/")).status, 401); eq((await get(8092, "casa.tail.ts.net", "/api/accounts")).status, 401); });
+    await t("con la cookie correcta se accede a la API", async () => { eq((await get(8092, "casa.tail.ts.net", "/api/accounts", "cm=" + TOK)).status, 200); });
+    await t("un token del mismo largo pero equivocado no entra", async () => { eq((await get(8092, "casa.tail.ts.net", "/?t=" + "b".repeat(48))).status, 401); });
+    await t("tras 10 tokens equivocados se bloquea la IP (429), incluso con el token bueno", async () => {
+      for (let i = 0; i < 10; i++) await get(8092, "casa.tail.ts.net", "/?t=mal" + i);
+      eq((await get(8092, "casa.tail.ts.net", "/?t=" + TOK)).status, 429);
+    });
+    await t("el bloqueo es por IP: con otra IP de cliente detrás del túnel sigue entrando", async () => {
+      const r = await new Promise<number>((res, rej) => { const q = httpm.request({ host: "127.0.0.1", port: 8092, path: "/?t=" + TOK, headers: { host: "casa.tail.ts.net", "x-forwarded-for": "203.0.113.9" } }, (x) => { x.resume(); res(x.statusCode ?? 0); }); q.on("error", rej); q.end(); });
+      eq(r, 302);
+    });
+  } finally { local.kill(); remote.kill(); await new Promise((r) => setTimeout(r, 300)); fs.rmSync(home, { recursive: true, force: true }); }
+}
+
 console.log(`\n${pass} OK, ${failN} fallos`);
 imap.close?.(); smtp.close(); fakeAi.close(); mockOauth.close();
 process.exit(failN ? 1 : 0);

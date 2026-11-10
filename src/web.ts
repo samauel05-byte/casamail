@@ -20,12 +20,27 @@ import { importPst } from "./pst.js";
 import { pipeline } from "node:stream/promises";
 
 let PORT = Number(process.env.PORT ?? 8025); // se actualiza con el puerto real al arrancar
-const HOST = "127.0.0.1"; // app local: solo accesible desde este equipo
-const TOKEN = process.env.CASAMAIL_TOKEN ?? (() => {
+// Por defecto CasaMail solo es accesible desde este equipo. El MODO REMOTO (CASAMAIL_REMOTE=1) es opcional y lo usa la app Android:
+// escucha en la red, solo atiende a los nombres de host de CASAMAIL_ALLOWED_HOSTS y limita los intentos con token equivocado.
+const REMOTE = () => process.env.CASAMAIL_REMOTE === "1";
+const HOST = REMOTE() ? (process.env.CASAMAIL_BIND || "0.0.0.0") : "127.0.0.1";
+const allowedHosts = () => (process.env.CASAMAIL_ALLOWED_HOSTS ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+const isLocalHost = (h: string) => /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(h);
+const hostOk = (h: string) => isLocalHost(h) || (REMOTE() && allowedHosts().includes(h.replace(/:\d+$/, "").toLowerCase()));
+const fails = new Map<string, { n: number; since: number }>(); // intentos fallidos por IP
+const FAIL_MAX = 10, FAIL_WINDOW = 10 * 60_000;
+function clientIp(req: Request): string {
+  const ra = req.socket.remoteAddress ?? "?";
+  const viaProxy = /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(ra); // túnel local (Tailscale Serve, cloudflared…): la IP real viene en la cabecera
+  const fwd = viaProxy ? String(req.headers["cf-connecting-ip"] ?? req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() : "";
+  return fwd || ra;
+}
+const TOKEN: string = process.env.CASAMAIL_TOKEN ?? (() => {
   let t = store.readJson<{ t?: string }>("token.json", {}).t;
   if (!t) { t = crypto.randomBytes(24).toString("hex"); store.writeJson("token.json", { t }); }
   return t;
 })();
+const sameToken = (a: unknown) => typeof a === "string" && a.length === TOKEN.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(TOKEN));
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 
 const app = express();
@@ -34,13 +49,23 @@ app.use(express.json({ limit: "40mb" }));
 
 // Defensa contra DNS-rebinding y CSRF: Host válido + token en cookie.
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host ?? "")) return res.status(403).end();
+  const host = req.headers.host ?? "";
+  if (!hostOk(host)) return res.status(403).end();
   // Retorno de OAuth: llega desde accounts.google.com / login.microsoftonline.com, así que no lleva cookie Strict.
   // Se protege con `state` aleatorio de un solo uso + PKCE, no con la cookie.
   if (req.path === "/oauth/callback") return next();
-  if (req.query.t === TOKEN) { res.setHeader("Set-Cookie", `cm=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`); return res.redirect(req.path); }
+  const ip = clientIp(req), f = fails.get(ip);
+  if (f && Date.now() - f.since > FAIL_WINDOW) fails.delete(ip);
+  if (f && f.n >= FAIL_MAX && Date.now() - f.since <= FAIL_WINDOW) return res.status(429).send("Demasiados intentos. Espera unos minutos.");
+  if (sameToken(req.query.t)) {
+    fails.delete(ip);
+    res.setHeader("Set-Cookie", `cm=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${isLocalHost(host) ? "" : "; Secure"}`); return res.redirect(req.path);
+  }
   const cookie = /(?:^|;\s*)cm=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
-  if (cookie !== TOKEN) return res.status(401).send("Abre CasaMail con el enlace que imprime al arrancar (npm start).");
+  if (!sameToken(cookie)) {
+    if (cookie || req.query.t !== undefined) { const g = fails.get(ip) ?? { n: 0, since: Date.now() }; g.n++; fails.set(ip, g); } // solo cuentan los intentos con un token equivocado
+    return res.status(401).send("Abre CasaMail con el enlace que imprime al arrancar (npm start).");
+  }
   next();
 });
 
@@ -403,7 +428,7 @@ export async function startServer(o: { port?: number; fallbackRandom?: boolean; 
   tick().catch(() => {});
   if (!process.env.CASAMAIL_NO_WARMUP) setTimeout(() => localLlm.warmup(true).catch(() => {}), 4000).unref();
   const origin = `http://${HOST}:${PORT}`, url = `${origin}/?t=${TOKEN}`;
-  if (!o.quiet) console.log(`\n  CasaMail está corriendo → ${url}\n  (solo accesible desde este equipo)\n`);
+  if (!o.quiet) console.log(`\n  CasaMail está corriendo → ${url}\n  ${REMOTE() ? `MODO REMOTO: escucha en ${HOST}:${PORT}. Hosts permitidos: ${allowedHosts().join(", ") || "(ninguno: define CASAMAIL_ALLOWED_HOSTS)"}. Usa siempre HTTPS (túnel).` : "(solo accesible desde este equipo)"}\n`);
   if (o.open) {
     const cmd = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
     try { spawn(cmd[0] as string, cmd[1] as string[], { stdio: "ignore", detached: true }).on("error", () => {}).unref(); } catch { /* sin navegador */ }
