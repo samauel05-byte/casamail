@@ -539,7 +539,7 @@ async function tabIA(c) {
     const d = loc.download;
     box.innerHTML = loc.models.map(m => {
       const using = engines.some(e => e.provider === 'local' && e.model === m.id), dling = d.state === 'downloading' && d.id === m.id, p = d.total ? Math.min(1, d.downloaded / d.total) : 0;
-      return `<div class="tier ${m.id === loc.recommended ? 'rec' : ''}"><div class="row" style="margin:0"><b class="grow">${esc(m.label)}</b>${m.id === loc.recommended ? '<span class="badge ai">Recomendado para tu equipo</span>' : ''}<span class="badge">${(m.bytes / 1e9).toFixed(1)} GB</span></div>
+      return `<div class="tier ${m.id === loc.recommended ? 'rec' : ''}"><b>${esc(m.label)}</b><div class="row" style="margin:5px 0 0">${m.id === loc.recommended ? '<span class="badge ai">Recomendado para tu equipo</span>' : ''}<span class="badge">${(m.bytes / 1e9).toFixed(1)} GB</span>${m.id === 'qwen2.5-7b' && !loc.gpu ? '<span class="badge">Lento sin tarjeta gráfica</span>' : ''}</div>
         <p class="mut small" style="margin:6px 0">${esc(m.blurb)}${m.fits ? '' : ` <span class="err">Tu equipo tiene ${loc.ramGB} GB de RAM: puede ir justo.</span>`}</p>
         ${dling ? `<div class="pbar"><i style="width:${Math.round(p * 100)}%"></i></div><div class="mut small">Descargando… ${fmtSize(d.downloaded)} de ${fmtSize(d.total)} (${Math.round(p * 100)}%) <button class="btn btn-ghost btn-sm" data-lcancel="1">Cancelar</button></div>`
           : using ? `<div class="ok small"><b>En uso ✔</b></div>`

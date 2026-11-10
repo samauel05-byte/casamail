@@ -68,8 +68,11 @@ export async function localStatus() {
   let available = true, error = "";
   try { await loadLib(); } catch (e) { available = false; error = (e as Error).message; }
   const ramGB = Math.round(os.totalmem() / 2 ** 30);
+  // El modelo potente solo se recomienda con aceleración por GPU (p. ej. Mac con chip M): en CPU tarda ~90 s en tareas del asistente.
+  let gpu: string | false = false;
+  if (available) { try { const nl = await loadLib(); llamaInst ??= await nl.getLlama({ build: "never", progressLogs: false, logLevel: nl.LlamaLogLevel.error }); gpu = llamaInst.gpu || false; } catch { /* sin dato: CPU */ } }
   return {
-    available, error, ramGB, dir: modelsDir(), recommended: ramGB >= 14 ? "qwen2.5-7b" : "qwen2.5-1.5b", download: downloadStatus(),
+    available, error, ramGB, gpu, dir: modelsDir(), recommended: gpu && ramGB >= 14 ? "qwen2.5-7b" : "qwen2.5-1.5b", download: downloadStatus(),
     models: MODELS.map((m) => ({ ...m, ready: isReady(m.id), fits: ramGB >= m.ramGB })),
   };
 }
