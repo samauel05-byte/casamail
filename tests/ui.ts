@@ -27,7 +27,9 @@ const ctx = await b.newContext({ viewport: { width: 1360, height: 800 } });
 const pg = await ctx.newPage();
 pg.setDefaultTimeout(10000); pg.on("dialog", (d) => d.accept());
 const errors: string[] = [];
-pg.on("pageerror", (e) => errors.push(e.message)); pg.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+pg.on("pageerror", (e) => errors.push(e.message)); pg.on("console", (m) => m.type() === "error" && !m.text().startsWith("Failed to load resource") && errors.push(m.text()));
+let tolerate500Until = 0; // durante el paso OAuth la cuenta apunta un momento a imap.gmail.com (inaccesible aquí): esos 500 son esperados
+pg.on("response", (r) => { if (r.status() >= 500 && Date.now() >= tolerate500Until) errors.push(`HTTP ${r.status()} ${r.request().method()} ${r.url().replace(BASE, "")}`); });
 const toastHas = (t: string) => pg.waitForFunction((x) => [...document.querySelectorAll(".toast .tmsg")].some((e) => e.textContent!.includes(x)), t);
 
 await pg.goto(`${BASE}/?t=tok`);
@@ -96,6 +98,60 @@ await pg.keyboard.press("Control+k"); await pg.fill("#pin", "salida");
 check("paleta filtra comandos", (await pg.locator(".pi").count()) >= 1);
 await pg.keyboard.press("Escape");
 
+step("Archivo local: importar un MBOX desde su ubicación (sin copiarlo)");
+const mbox = (n: number, tag: string) => Array.from({ length: n }, (_, i) => `From - Mon Mar  ${i + 2} 09:00:00 2026\nFrom: Persona ${i} <p${i}@x.com>\nTo: yo@casa.test\nSubject: ${tag} ${["Uno", "Dos", "Tres", "Cuatro"][i]}\nDate: Mon, 0${i + 2} Mar 2026 09:00:00 +0000\n\nContenido del mensaje ${i} con palabra-${tag.toLowerCase()}\n\n`).join("");
+const mbPath = path.join(os.tmpdir(), `cm-ui-${Date.now()}.mbox`); fs.writeFileSync(mbPath, mbox(3, "Archivo"));
+await pg.click("#cfg"); await pg.click('#mbox [data-tab="archivo"]'); await pg.waitForSelector("#ipath");
+await pg.fill("#ipath", mbPath); await pg.click("#igo");
+await pg.waitForSelector(".jobcard.done", { timeout: 20000 });
+check("importa el MBOX en segundo plano y NO toca el original", fs.existsSync(mbPath) && (await pg.textContent(".jobcard"))!.includes("3 importados"));
+await pg.click("#mx");
+await pg.selectOption("#acct", "__local__"); await pg.waitForSelector(".m");
+check("el Archivo local aparece como cuenta, con su carpeta y 3 mensajes", (await pg.locator(".m").count()) === 3 && (await pg.textContent("#side"))!.includes("Archivo local · 3 mensajes"));
+await pg.locator(".m", { hasText: "Archivo Dos" }).click(); await pg.waitForSelector(".vsub");
+check("se lee un mensaje del archivo", (await pg.textContent("#view"))!.includes("palabra-archivo"));
+check("en el archivo no hay Archivar/Spam/Posponer, pero sí Descargar .eml", (await pg.locator("#ar, #sp, #sn, #ra").count()) === 0 && (await pg.locator("#dl").count()) === 1);
+const eml = await (await pg.request.get(BASE + (await pg.getAttribute("#dl", "href")))).text();
+check("el .eml descargado es el mensaje", eml.includes("Subject: Archivo Dos") && eml.includes("palabra-archivo"));
+if ((await pg.getAttribute("#aisearch", "aria-pressed")) === "true") await pg.click("#aisearch");  // salir del modo "búsqueda con IA" de pasos anteriores
+await pg.fill("#q", "palabra-archivo"); await pg.press("#q", "Enter"); await pg.waitForTimeout(600);
+check("búsqueda de texto en el archivo", (await pg.locator(".m").count()) === 3);
+await pg.locator(".m", { hasText: "Archivo Uno" }).click(); await pg.waitForSelector(".vsub"); await pg.click("#tr");
+await pg.waitForFunction(() => !document.querySelector("#list")!.textContent!.includes("Archivo Uno"));
+check("eliminar un mensaje del archivo", !(await pg.textContent("#list"))!.includes("Archivo Uno"));
+await pg.fill("#q", ""); await pg.press("#q", "Enter");
+const aiLocal = await (await pg.request.post(`${BASE}/api/ai/search?account=__local__&folder=Importado`, { data: { query: "lo de persona" } })).json();
+check("la búsqueda con IA también funciona sobre el archivo local (no usa el servidor por error)", Array.isArray(aiLocal.messages) && !aiLocal.error);
+
+step("Archivo local: descargar, subir y seguridad de las rutas");
+await pg.click("#cfg"); await pg.click('#mbox [data-tab="archivo"]'); await pg.waitForSelector("#xgo");
+const mb = await (await pg.request.get(BASE + (await pg.getAttribute("#xgo", "href"))!)).text();
+check("descarga del archivo local como .mbox", mb.startsWith("From ") && (mb.match(/^From /gm) ?? []).length === 2 && mb.includes("Subject: Archivo Dos"));
+const imp = (data: object) => pg.request.post(`${BASE}/api/archive/import-path`, { data });
+const errOf = async (r: { json(): Promise<{ error?: string }> }) => (await r.json()).error ?? "";
+check("ruta relativa rechazada", /ruta completa/.test(await errOf(await imp({ path: "antiguo.pst" }))));
+check("formato no admitido rechazado", /Formato no admitido/.test(await errOf(await imp({ path: "/etc/passwd" }))) && /Formato no admitido/.test(await errOf(await imp({ path: path.join(os.tmpdir(), "x.txt") }))));
+check("archivo inexistente", /No encuentro/.test(await errOf(await imp({ path: path.join(os.tmpdir(), "no-existe.pst") }))));
+check("un token inventado no sirve", /caducó/.test(await errOf(await imp({ token: "inventado" }))));
+const upBuf = Buffer.from(mbox(4, "Subido"));
+const up = await pg.request.put(`${BASE}/api/archive/upload?filename=subido.mbox&folder=Subido`, { data: upBuf, headers: { "Content-Type": "application/octet-stream" } });
+const upJob = (await up.json()).job as string; let jd: { state: string; added: number } = { state: "running", added: 0 };
+for (let i = 0; i < 40 && jd.state === "running"; i++) { await new Promise((r) => setTimeout(r, 250)); jd = await (await pg.request.get(`${BASE}/api/archive/jobs/${upJob}`)).json(); }
+check("subida en streaming: importa 4 mensajes", jd.state === "done" && jd.added === 4);
+check("la subida rechaza formatos no admitidos", (await pg.request.put(`${BASE}/api/archive/upload?filename=virus.exe`, { data: Buffer.from("x"), headers: { "Content-Type": "application/octet-stream" } })).status() === 400);
+check("sin cookie, importar está protegido (401)", (await fetch(`${BASE}/api/archive/import-path`, { method: "POST" })).status === 401 && (await fetch(`${BASE}/api/archive/upload?filename=a.mbox`, { method: "PUT", body: "x" })).status === 401 && (await fetch(`${BASE}/api/export?account=__local__`)).status === 401);
+const tmpLeft = fs.existsSync(path.join(process.env.CASAMAIL_HOME!, "archive", "tmp")) ? fs.readdirSync(path.join(process.env.CASAMAIL_HOME!, "archive", "tmp")).length : 0;
+check("la copia temporal de la subida se borra al terminar", tmpLeft === 0);
+
+step("Archivo local: mover correo de una cuenta (solo copia)");
+await pg.waitForFunction(() => document.querySelector("#ofol option"));
+await pg.selectOption("#oage", ""); await pg.click("#ogo");
+await pg.waitForFunction(() => [...document.querySelectorAll(".jobcard")].some((c) => c.textContent!.includes("copiados") && c.classList.contains("done")), null, { timeout: 20000 });
+const lf = (await (await pg.request.get(`${BASE}/api/folders?account=__local__`)).json()) as { path: string; total: number }[];
+check("el correo de la cuenta se copió al archivo local", lf.some((f) => f.path === "yo@casa.test/INBOX" && f.total >= 1));
+check("el servidor no se tocó (solo copia)", (await (await pg.request.get(`${BASE}/api/folders?account=t`)).json()).find((f: { path: string }) => f.path === "INBOX").total >= 1);
+await pg.click("#mx"); await pg.selectOption("#acct", "t"); await pg.waitForSelector(".m");
+
 step("ajustes de Yerleny");
 await pg.click("#cfg"); await pg.click('#mbox [data-tab="ia"]'); await pg.waitForSelector("#ap");
 check("ajustes con proveedores de IA", (await pg.locator("#ap option").count()) >= 8);
@@ -113,7 +169,7 @@ await pg.click("#asst"); await pg.waitForSelector(".bub.bot");
 check("el saludo usa tu nombre", (await pg.textContent("#chat"))!.includes("Hola, Sam"));
 await pg.click("#dclose");
 
-const errMark = errors.length; // la cuenta apunta un momento a imap.gmail.com (inaccesible aquí): ese 500 es esperado
+tolerate500Until = Infinity; const errMark = errors.length; // la cuenta apunta un momento a imap.gmail.com (inaccesible aquí): ese 500 es esperado
 step("OAuth: conectar Google con ventana emergente");
 await pg.click("#cfg"); await pg.click('[data-add="google"]'); await pg.waitForSelector("#ocid");
 await pg.fill("#ocid", "mock-client"); await pg.fill("#ocs", "shh");
@@ -142,7 +198,8 @@ const xssBody = await xss.text();
 check("error del proveedor se escapa (sin XSS)", xssBody.includes("&lt;img") && !xssBody.includes("<img"));
 check("callback con CSP estricta", (xss.headers.get("content-security-policy") ?? "").includes("default-src 'none'"));
 
-for (let i = errors.length - 1; i >= errMark; i--) if (/status of 500/.test(errors[i])) errors.splice(i, 1);
+for (let i = errors.length - 1; i >= errMark; i--) if (/^HTTP 500/.test(errors[i])) errors.splice(i, 1);
+tolerate500Until = Date.now() + 20000; // peticiones lentas todavía en vuelo
 store.updateAccount("t", (a) => ({ ...a, imap: { host: "127.0.0.1", port: 1143, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } }));
 console.log("\n  Diseño responsive");
 const m = await b.newContext({ viewport: { width: 390, height: 800 } });

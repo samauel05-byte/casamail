@@ -39,6 +39,8 @@ const ICONS = {
   minus: '<path d="M5 12h14"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>',
   copy: '<rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+  hdd: '<line x1="22" x2="2" y1="12" y2="12"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/><line x1="6" x2="6.01" y1="16" y2="16"/><line x1="10" x2="10.01" y1="16" y2="16"/>',
+  upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
   key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
   globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
   user: '<path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
@@ -51,9 +53,10 @@ const I = (n, c = '') => `<svg class="ic ${c}" viewBox="0 0 24 24" aria-hidden="
 /* ---------- estado ---------- */
 const S = { acct: '', folder: 'INBOX', cur: null, macct: '', images: false, msgs: [], triage: {}, tri: false, ai: false, aiq: null, aiParsed: null, reply: null,
   hist: [], sig: {}, thread: true, filter: '', accounts: [], aiOk: false, delay: 10, folders: [], req: 0, files: [], yer: { notes: [] } };
+const LOCAL = '__local__'; // cuenta especial: el Archivo local (correo guardado en tu disco)
 const A = () => S.macct || S.acct;
 const qs = a => `account=${encodeURIComponent(a || A())}&folder=${encodeURIComponent(S.folder)}`;
-const firstAcct = () => (S.acct && S.acct !== '*' ? S.acct : S.accounts[0]?.id || '');
+const firstAcct = () => (S.acct && S.acct !== '*' && S.acct !== LOCAL ? S.acct : S.accounts[0]?.id || '');
 
 async function api(p, body, method) {
   const o = body !== undefined || method ? { method: method || 'POST', headers: { 'Content-Type': 'application/json' }, body: body !== undefined ? JSON.stringify(body) : undefined } : undefined;
@@ -88,7 +91,7 @@ const dayLabel = iso => {
 };
 const linkify = t => esc(t).replace(/(https?:\/\/[^\s<]+[^\s<.,;:!?)"'])/g, u => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
 const fmtLeft = ms => { const m = Math.max(0, Math.ceil(ms / 60000)); return m <= 1 ? 'menos de 1 min' : m + ' min'; };
-const fmtSize = b => b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
+const fmtSize = b => b >= 1073741824 ? (b / 1073741824).toFixed(1) + ' GB' : b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
 const fail = e => { if (e.code === 'reauth') toast(e.message, { kind: 'bad', action: 'Reconectar', onAction: () => settings('cuentas'), ms: 12000 }); else toast(e.message, { kind: 'bad' }); };
 const YL = (c = '') => `<span class="yl ${c}">${I('sparkles', c === 'lg' ? 'lg' : 'sm')}</span>`;
 const mkIcon = (sel, name, cls) => { const e = $(sel); if (e) e.innerHTML = I(name, cls); };
@@ -112,9 +115,11 @@ $('#theme').onclick = () => setTheme({ auto: 'light', light: 'dark', dark: 'auto
 async function init() {
   const [accs, set, aiCfg, delay, yer] = await Promise.all([api('/api/accounts'), api('/api/settings'), api('/api/ai/config').catch(() => null), api('/api/send-delay').catch(() => ({ minutes: 10 })), api('/api/yerleny').catch(() => ({ notes: [] }))]);
   S.accounts = accs; S.sig = set.signatures || {}; S.aiOk = !!aiCfg; S.delay = delay.minutes; S.yer = yer;
-  $('#main').classList.toggle('welcome', !accs.length);
-  if (!accs.length) { $('#side').innerHTML = ''; return renderWelcome(); }
-  if (!S.acct || (S.acct !== '*' && !accs.find(a => a.id === S.acct))) S.acct = accs.length > 1 ? '*' : accs[0].id;
+  S.arch = await api('/api/archive/stats').catch(() => ({ messages: 0 })); const hasLocal = S.arch.messages > 0;
+  $('#main').classList.toggle('welcome', !accs.length && !hasLocal);
+  if (!accs.length && !hasLocal) { $('#side').innerHTML = ''; return renderWelcome(); }
+  if (!S.acct || (S.acct !== '*' && S.acct !== LOCAL && !accs.find(a => a.id === S.acct))) S.acct = accs.length > 1 ? '*' : accs.length ? accs[0].id : LOCAL;
+  if (S.acct === LOCAL && !hasLocal && accs.length) S.acct = accs.length > 1 ? '*' : accs[0].id;
   S.macct = ''; S.folder = 'INBOX'; S.cur = null; resetView();
   await folders(); await list(); outboxCount();
 }
@@ -123,8 +128,8 @@ function renderWelcome() {
   $('#view').innerHTML = `<div class="empty" style="min-height:100%"><div style="margin-bottom:8px">${LOGO(150)}</div>
     <h3 style="font-size:26px;letter-spacing:-.02em">Bienvenido a CasaMail</h3>
     <p>Tu correo, en tu propio equipo. Conecta tu primera cuenta para empezar: no hay servidores intermedios y tus mensajes no salen de aquí.</p>
-    <div class="row" style="justify-content:center;margin-top:14px"><button class="btn btn-primary" data-add-first="google">Conectar Gmail</button><button class="btn" data-add-first="microsoft">Conectar Outlook</button><button class="btn" data-add-first="imap">Otra cuenta (IMAP)</button></div></div>`;
-  $$('[data-add-first]').forEach(b => b.onclick = () => settings('cuentas', b.dataset.addFirst));
+    <div class="row" style="justify-content:center;margin-top:14px"><button class="btn btn-primary" data-add-first="google">Conectar Gmail</button><button class="btn" data-add-first="microsoft">Conectar Outlook</button><button class="btn" data-add-first="imap">Otra cuenta (IMAP)</button><button class="btn" data-add-first="archivo">Importar un PST / MBOX</button></div></div>`;
+  $$('[data-add-first]').forEach(b => b.onclick = () => (b.dataset.addFirst === 'archivo' ? settings('archivo') : settings('cuentas', b.dataset.addFirst)));
 }
 function resetView() {
   $('#main').classList.remove('reading');
@@ -137,11 +142,19 @@ const FOLDER = { '\\Inbox': ['inbox', 'Recibidos'], '\\Sent': ['send', 'Enviados
 const folderMeta = f => FOLDER[f.specialUse] || (f.path === 'INBOX' ? FOLDER['\\Inbox'] : ['folder', f.name]);
 async function folders() {
   let h = `<button class="btn btn-primary compose-btn" id="new">${I('pencil')} Redactar</button>`;
-  if (S.accounts.length > 1) h += `<div class="acct-pick"><select id="acct" aria-label="Cuenta"><option value="*">Todas las cuentas</option>${S.accounts.map(a => `<option value="${esc(a.id)}">${esc(a.email)}</option>`).join('')}</select></div>`;
-  else h += `<div class="side-label" style="padding-top:0">${esc(S.accounts[0]?.email || '')}</div>`;
-  const tail = `<div class="side-sep"></div><div class="nav" data-sched="1">${I('send')}<span>Salida</span><span class="n pill" id="outn" hidden></span></div>${S.acct !== '*' ? `<div class="nav" data-newf="1">${I('plus')}<span>Nueva carpeta</span></div>` : ''}
+  h += `<div class="acct-pick"><select id="acct" aria-label="Cuenta">${S.accounts.length > 1 ? '<option value="*">Todas las cuentas</option>' : ''}${S.accounts.map(a => `<option value="${esc(a.id)}">${esc(a.email)}</option>`).join('')}<option value="${LOCAL}">Archivo local (en tu disco)</option></select></div>`;
+  const tail = `<div class="side-sep"></div><div class="nav" data-sched="1">${I('send')}<span>Salida</span><span class="n pill" id="outn" hidden></span></div>${S.acct !== '*' && S.acct !== LOCAL ? `<div class="nav" data-newf="1">${I('plus')}<span>Nueva carpeta</span></div>` : ''}<div class="nav" id="jobchip" data-jobs="1" hidden>${I('hdd')}<span id="jobtxt">Tarea en curso</span></div>
     <div class="side-foot">${I('lock', 'sm')}<span>Local y privado: tus correos no pasan por ningún servidor de CasaMail.</span></div>`;
   if (S.acct === '*') { $('#side').innerHTML = h + `<div class="nav on" data-all="1">${I('inbox')}<span>Recibidos (todas)</span></div>` + tail; }
+  else if (S.acct === LOCAL) {
+    try {
+      const f = await api('/api/folders?account=' + LOCAL); S.folders = f;
+      if (f.length && !f.find(x => x.path === S.folder)) S.folder = f[0].path;
+      S.arch = { ...(S.arch || {}), messages: f.reduce((n, x) => n + x.total, 0) };
+      h += `<div class="side-label">Archivo local · ${S.arch.messages.toLocaleString('es')} mensajes</div>` + f.map(x => { const depth = x.path.split('/').length - 1; return `<div class="nav ${x.path === S.folder ? 'on' : ''}" data-p="${esc(x.path)}" title="${esc(x.path)}" style="padding-left:${12 + depth * 14}px">${I(depth ? 'folder' : 'hdd')}<span>${esc(x.name)}</span>${x.unread ? `<span class="n pill">${x.unread}</span>` : `<span class="n mut">${x.total.toLocaleString('es')}</span>`}</div>`; }).join('') + `<div class="nav" data-import="1">${I('upload')}<span>Importar PST / MBOX…</span></div>`;
+    } catch (e) { h += `<p class="err" style="padding:10px">${esc(e.message)}</p>`; }
+    $('#side').innerHTML = h + tail;
+  }
   else {
     try {
       const f = await api('/api/folders?account=' + encodeURIComponent(S.acct)); S.folders = f;
@@ -153,7 +166,7 @@ async function folders() {
   }
   const sel = $('#acct'); if (sel) sel.value = S.acct;
   $('#new').onclick = () => compose();
-  if (sel) sel.onchange = async e => { S.acct = e.target.value; S.macct = ''; S.folder = 'INBOX'; S.aiq = null; S.cur = null; resetView(); await folders(); await list(); };
+  if (sel) sel.onchange = async e => { S.acct = e.target.value; S.macct = ''; S.folder = e.target.value === LOCAL ? '' : 'INBOX'; S.aiq = null; S.cur = null; resetView(); await folders(); await list(); };
   outboxCount();
 }
 async function outboxCount() {
@@ -176,6 +189,7 @@ async function list() {
     let r;
     if (S.aiq) r = await api(`/api/ai/search?${qs(S.acct === '*' ? firstAcct() : S.acct)}`, { query: S.aiq });
     else if (S.acct === '*') r = await api('/api/unified');
+    else if (S.acct === LOCAL && !S.folder) r = { messages: [] };
     else if (S.filter === 'starred') r = await api(`/api/search?${qs(S.acct)}&starred=1`);
     else r = await api(`/api/messages?${qs(S.acct)}${S.filter === 'unread' ? '&unread=1' : ''}`);
     if (id !== S.req) return;
@@ -204,9 +218,9 @@ function drawList() {
     return `${head}<div class="m ${m.unread ? 'unread' : ''} ${isCur(m) ? 'on' : ''}" data-u="${m.uid}" data-a="${esc(m.account || '')}" role="button" tabindex="0">${avatar(a.name, a.email)}
       <div style="min-width:0"><div class="m-top"><span class="fr">${esc(a.name)}</span><span class="d">${fmtDate(m.date)}</span></div>
       <div class="su">${m.starred ? `<span class="star">${I('star', 'sm')}</span>` : ''}<span class="t">${esc(m.subject)}</span>${n > 1 ? `<span class="badge">${n}</span>` : ''}</div>${meta ? `<div class="m-meta">${meta}</div>` : ''}</div>
-      <div class="m-act"><button class="iconbtn sm" data-qa="star" title="Destacar" aria-label="Destacar">${I('star', 'sm')}</button><button class="iconbtn sm" data-qa="archive" title="Archivar" aria-label="Archivar">${I('archive', 'sm')}</button><button class="iconbtn sm" data-qa="trash" title="Papelera" aria-label="Papelera">${I('trash', 'sm')}</button></div></div>`;
+      <div class="m-act"><button class="iconbtn sm" data-qa="star" title="Destacar" aria-label="Destacar">${I('star', 'sm')}</button>${S.acct === LOCAL ? '' : `<button class="iconbtn sm" data-qa="archive" title="Archivar" aria-label="Archivar">${I('archive', 'sm')}</button>`}<button class="iconbtn sm" data-qa="trash" title="Papelera" aria-label="Papelera">${I('trash', 'sm')}</button></div></div>`;
   }).join('');
-  if (!groups.length) html += `<div class="empty"><div class="big">${I(S.filter === 'starred' ? 'star' : 'check', 'lg')}</div><h3>${S.aiq ? 'Sin resultados' : S.filter ? 'Nada por aquí' : 'Bandeja vacía'}</h3><p>${S.aiq ? 'Prueba con otras palabras.' : S.filter ? 'No hay mensajes con este filtro.' : 'Estás al día. Disfruta el silencio.'}</p></div>`;
+  if (!groups.length) html += `<div class="empty"><div class="big">${I(S.filter === 'starred' ? 'star' : 'check', 'lg')}</div><h3>${S.aiq ? 'Sin resultados' : S.filter ? 'Nada por aquí' : S.acct === LOCAL ? 'Tu archivo local está vacío' : 'Bandeja vacía'}</h3><p>${S.aiq ? 'Prueba con otras palabras.' : S.filter ? 'No hay mensajes con este filtro.' : S.acct === LOCAL ? 'Importa un PST de Outlook o un MBOX, o lleva aquí el correo viejo de tus cuentas.' : 'Estás al día. Disfruta el silencio.'}</p>${S.acct === LOCAL && !S.filter && !S.aiq ? '<button class="btn btn-primary" data-import="1">Importar un PST o MBOX</button>' : ''}</div>`;
   $('#list').innerHTML = html; bindListHead();
   const c = $('#clr'); if (c) c.onclick = () => { S.aiq = null; $('#q').value = ''; list(); };
 }
@@ -224,12 +238,14 @@ function bindListHead() {
   };
 }
 $('#list').addEventListener('click', e => {
+  if (e.target.closest('[data-import]')) return settings('archivo');
   const qa = e.target.closest('[data-qa]'), m = e.target.closest('.m'); if (!m) return;
   if (qa) { e.stopPropagation(); return rowAct(qa.dataset.qa, Number(m.dataset.u), m.dataset.a || A()); }
   openMsg(m.dataset.u, m.dataset.a).catch(x => { $('#view').innerHTML = `<div class="empty"><h3>No se pudo abrir</h3><p>${esc(x.message)}</p></div>`; fail(x); });
 });
 $('#list').addEventListener('keydown', e => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('m')) { e.preventDefault(); e.target.click(); } });
 async function rowAct(kind, uid, acct) {
+  if (kind === 'trash' && acct === LOCAL && !confirm('¿Eliminar este mensaje del archivo local?')) return;
   const q = `account=${encodeURIComponent(acct)}&folder=${encodeURIComponent(S.folder)}`;
   try {
     if (kind === 'star') { const m = S.msgs.find(x => x.uid === uid && (x.account || '') === (acct || '')); const next = !(m && m.starred); await api(`/api/message/${uid}/flags?${q}`, { starred: next }); if (m) m.starred = next; drawList(); return; }
@@ -248,12 +264,12 @@ async function openMsg(uid, acct) {
 }
 const tb = (id, ic, label, cls = '') => `<button class="iconbtn ${cls}" id="${id}" title="${label}" aria-label="${label}">${I(ic)}</button>`;
 function renderMsg() {
-  const m = S.cur; if (!m) return; const f = parseAddr(m.from);
+  const m = S.cur; if (!m) return; const f = parseAddr(m.from); const loc = A() === LOCAL;
   const csp = `default-src 'none'; style-src 'unsafe-inline'; img-src data: ${S.images ? 'https: http:' : ''}`;
   const body = m.html
     ? `<iframe class="msg-html" title="Contenido del mensaje" sandbox="allow-popups allow-same-origin" referrerpolicy="no-referrer" srcdoc="${esc(`<meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank"><style>body{font-family:system-ui,sans-serif;font-size:14px;margin:12px;color:#222}img{max-width:100%;height:auto}</style>` + m.html)}" onload="try{this.style.height=this.contentDocument.body.scrollHeight+32+'px'}catch(e){}"></iframe>`
     : `<div class="msg-text">${linkify(m.text)}</div>`;
-  $('#view').innerHTML = `<div class="vtool">${tb('back', 'back', 'Volver', 'only-narrow')}${tb('ar', 'archive', 'Archivar (E)')}${tb('sp', 'spam', 'Marcar como spam')}${tb('tr', 'trash', 'Papelera (#)')}<span class="vs"></span>${tb('un', 'mail', 'Marcar como no leído')}${tb('sn', 'clock', 'Posponer')}${tb('st', 'star', 'Destacar (S)')}<span class="grow"></span>${tb('rp', 'reply', 'Responder (R)')}${tb('ra', 'replyall', 'Responder a todos')}</div>
+  $('#view').innerHTML = `<div class="vtool">${tb('back', 'back', 'Volver', 'only-narrow')}${loc ? '' : tb('ar', 'archive', 'Archivar (E)') + tb('sp', 'spam', 'Marcar como spam')}${tb('tr', 'trash', loc ? 'Eliminar del archivo' : 'Papelera (#)')}<span class="vs"></span>${tb('un', 'mail', 'Marcar como no leído')}${loc ? '' : tb('sn', 'clock', 'Posponer')}${tb('st', 'star', 'Destacar (S)')}<a class="iconbtn" id="dl" href="/api/message/${m.uid}/eml?${qs()}" download title="Descargar como .eml" aria-label="Descargar como .eml">${I('download')}</a><span class="grow"></span>${tb('rp', 'reply', 'Responder (R)')}${loc ? '' : tb('ra', 'replyall', 'Responder a todos')}</div>
   <div class="vbody"><h1 class="vsub">${esc(m.subject)}</h1>
     <div class="vhead">${avatar(f.name, f.email, 'lg')}<div class="who"><div class="nm">${esc(f.name)} <span class="em">&lt;${esc(f.email)}&gt;</span></div><div class="to">Para ${esc(m.to || '—')}${m.cc ? ' · Cc ' + esc(m.cc) : ''}</div></div><span class="dt">${m.date ? new Date(m.date).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' }) : ''}</span></div>
     <div class="aibar"><button class="btn btn-ai btn-sm" id="ais">${I('sparkles', 'sm')} Resumir</button><button class="btn btn-ai btn-sm" id="air">${I('sparkles', 'sm')} Sugerir respuestas</button></div><div id="aiout"></div>
@@ -262,21 +278,21 @@ function renderMsg() {
     ${body}</div>`;
   const on = (i, fn) => { const e = $(i); if (e) e.onclick = fn; };
   on('#back', () => $('#main').classList.remove('reading')); on('#im', () => { S.images = true; renderMsg(); });
-  on('#rp', () => compose({ reply: { all: false } })); on('#ra', () => compose({ reply: { all: true } }));
+  on('#rp', () => (loc ? compose({ to: f.email, subject: 'Re: ' + m.subject.replace(/^re:\s*/i, '') }) : compose({ reply: { all: false } }))); on('#ra', () => compose({ reply: { all: true } }));
   on('#st', () => toggleStar()); on('#un', () => act('flags', { read: false }, 'Marcado como no leído'));
-  on('#ar', () => act('archive', {}, 'Archivado', 1)); on('#sp', () => act('spam', {}, 'Movido a spam', 1)); on('#tr', () => act('trash', {}, 'Movido a la papelera', 1));
+  on('#ar', () => act('archive', {}, 'Archivado', 1)); on('#sp', () => act('spam', {}, 'Movido a spam', 1)); on('#tr', () => { if (loc && !confirm('¿Eliminar este mensaje del archivo local?')) return; act('trash', {}, loc ? 'Eliminado del archivo' : 'Movido a la papelera', 1); });
   on('#sn', () => snoozeDialog());
   on('#ais', async e => {
     if (!needAi()) return; const b = e.currentTarget; busy(b, true); $('#aiout').innerHTML = `<div class="card-ai"><h4>${I('sparkles', 'sm')} Yerleny · Resumen</h4><div class="typing"><i></i><i></i><i></i></div></div>`;
-    try { const r = await api('/api/ai/summarize', { uid: m.uid, folder: S.folder }); $('#aiout').innerHTML = `<div class="card-ai"><h4>${I('sparkles', 'sm')} Yerleny · Resumen</h4><pre>${esc(r.summary)}</pre></div>`; } catch (x) { $('#aiout').innerHTML = `<div class="card-ai err">${esc(x.message)}</div>`; }
+    try { const r = await api('/api/ai/summarize?account=' + encodeURIComponent(A()), { uid: m.uid, folder: S.folder }); $('#aiout').innerHTML = `<div class="card-ai"><h4>${I('sparkles', 'sm')} Yerleny · Resumen</h4><pre>${esc(r.summary)}</pre></div>`; } catch (x) { $('#aiout').innerHTML = `<div class="card-ai err">${esc(x.message)}</div>`; }
     busy(b, false);
   });
   on('#air', async e => {
     if (!needAi()) return; const b = e.currentTarget; busy(b, true); $('#aiout').innerHTML = `<div class="card-ai"><h4>${I('sparkles', 'sm')} Yerleny · Respuestas sugeridas</h4><div class="typing"><i></i><i></i><i></i></div></div>`;
     try {
-      const r = await api('/api/ai/replies', { uid: m.uid, folder: S.folder });
+      const r = await api('/api/ai/replies?account=' + encodeURIComponent(A()), { uid: m.uid, folder: S.folder });
       $('#aiout').innerHTML = `<div class="card-ai"><h4>${I('sparkles', 'sm')} Yerleny · Respuestas sugeridas (toca una para editarla)</h4>${r.options.map((o, i) => `<div class="opt" data-i="${i}" role="button" tabindex="0"><b>${esc(o.label)}</b>${esc(o.body)}</div>`).join('')}</div>`;
-      $$('.opt').forEach(el => el.onclick = () => compose({ reply: { all: false }, text: r.options[el.dataset.i].body }));
+      $$('.opt').forEach(el => el.onclick = () => compose(loc ? { to: f.email, subject: 'Re: ' + m.subject.replace(/^re:\s*/i, ''), text: r.options[el.dataset.i].body } : { reply: { all: false }, text: r.options[el.dataset.i].body }));
     } catch (x) { $('#aiout').innerHTML = `<div class="card-ai err">${esc(x.message)}</div>`; }
     busy(b, false);
   });
@@ -306,6 +322,7 @@ function snoozeDialog() {
 /* ---------- redactar ---------- */
 const sigFor = id => S.sig[id] || '';
 function compose(o = {}) {
+  if (!S.accounts.length) return toast('Para escribir necesitas una cuenta conectada. Añádela en Ajustes → Cuentas.', { kind: 'bad', action: 'Añadir', onAction: () => settings('cuentas') });
   S.reply = o.reply || null; S.files = []; renderFiles(); const r = !!S.reply;
   $('#compose').hidden = false; $('#compose').classList.remove('min'); $('#ctitle').textContent = r ? 'Responder' : 'Mensaje nuevo';
   $('#from').innerHTML = S.accounts.map(a => `<option value="${esc(a.id)}">${esc(a.email)}</option>`).join(''); $('#from').value = r ? A() : (o.from || firstAcct());
@@ -327,7 +344,7 @@ $('#from').onchange = () => { /* la firma sigue la cuenta si el cuerpo no se ha 
 $('#aitog').onclick = () => { if (!needAi()) return; $('#aibox').hidden = !$('#aibox').hidden; if (!$('#aibox').hidden) $('#aiins').focus(); };
 $('#aigo').onclick = async e => {
   const ins = $('#aiins').value.trim(); if (!ins) return; busy(e.currentTarget, true); $('#aist').textContent = 'Redactando…';
-  try { const r = await api('/api/ai/draft', { instruction: ins, tone: $('#aitone').value, uid: S.reply && S.cur ? S.cur.uid : undefined, folder: S.folder }); if (r.subject && !S.reply) $('#sub').value = r.subject; const sg = sigFor($('#from').value); $('#body').value = r.body + (sg ? `\n\n-- \n${sg}` : ''); $('#aist').textContent = 'Listo. Revísalo antes de enviar.'; }
+  try { const r = await api('/api/ai/draft?account=' + encodeURIComponent(A()), { instruction: ins, tone: $('#aitone').value, uid: S.reply && S.cur ? S.cur.uid : undefined, folder: S.folder }); if (r.subject && !S.reply) $('#sub').value = r.subject; const sg = sigFor($('#from').value); $('#body').value = r.body + (sg ? `\n\n-- \n${sg}` : ''); $('#aist').textContent = 'Listo. Revísalo antes de enviar.'; }
   catch (x) { $('#aist').innerHTML = `<span class="err">${esc(x.message)}</span>`; }
   busy($('#aigo'), false);
 };
@@ -393,11 +410,11 @@ function openModal(html, narrow) { const b = $('#mbox'); b.className = narrow ? 
 function closeModal() { $('#modal').hidden = true; clearInterval(modalTimer); oauthPoll && clearInterval(oauthPoll); }
 $('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
 $('#cfg').onclick = () => settings('cuentas');
-const TABS = [['cuentas', 'user', 'Cuentas'], ['ia', 'sparkles', 'Yerleny'], ['firma', 'pencil', 'Firma'], ['envio', 'clock', 'Envío'], ['salida', 'send', 'Salida']];
+const TABS = [['cuentas', 'user', 'Cuentas'], ['archivo', 'hdd', 'Archivo local'], ['ia', 'sparkles', 'Yerleny'], ['firma', 'pencil', 'Firma'], ['envio', 'clock', 'Envío'], ['salida', 'send', 'Salida']];
 function settings(tab = 'cuentas', pre) {
   openModal(`<nav class="set-nav"><h3>Ajustes</h3>${TABS.map(([k, ic, l]) => `<div class="nav ${k === tab ? 'on' : ''}" data-tab="${k}" role="button" tabindex="0">${I(ic)}<span>${l}</span></div>`).join('')}</nav><div class="set-body" id="sbody"><button class="iconbtn set-close" id="mx" aria-label="Cerrar">${I('x')}</button><div id="tabc"><div class="wait"><div class="spin"></div></div></div></div>`);
   clearInterval(modalTimer); $('#mx').onclick = closeModal; $$('[data-tab]').forEach(n => n.onclick = () => settings(n.dataset.tab));
-  ({ cuentas: tabCuentas, ia: tabIA, firma: tabFirma, envio: tabEnvio, salida: tabSalida })[tab]($('#tabc'), pre).catch(e => { $('#tabc').innerHTML = `<p class="err">${esc(e.message)}</p>`; });
+  ({ cuentas: tabCuentas, archivo: tabArchivo, ia: tabIA, firma: tabFirma, envio: tabEnvio, salida: tabSalida })[tab]($('#tabc'), pre).catch(e => { $('#tabc').innerHTML = `<p class="err">${esc(e.message)}</p>`; });
 }
 const provMark = { google: ['G', '#d9483b'], microsoft: ['M', '#2a6fdb'], imap: ['@', '#6b6558'] };
 
@@ -526,9 +543,88 @@ async function tabSalida(c) {
   };
   await draw(); modalTimer = setInterval(() => draw().catch(() => {}), 15000);
 }
+
+/* ---------- Archivo local: importar / descargar / liberar espacio ---------- */
+const etaOf = j => { if (j.state !== 'running' || j.progress < 0.02) return ''; const left = ((Date.now() - j.startedAt) / 1000) * (1 - j.progress) / j.progress; return ' · quedan ~' + (left > 3600 ? (left / 3600).toFixed(1) + ' h' : left > 60 ? Math.round(left / 60) + ' min' : Math.round(left) + ' s'); };
+const jobCard = j => `<div class="jobcard ${j.state}"><div class="row" style="margin:0"><b class="grow">${esc(j.label)}</b><span class="badge ${j.state === 'error' ? 'hi' : j.state === 'done' ? 'ai' : ''}">${({ running: 'En curso', done: 'Listo', error: 'Error', cancelled: 'Cancelado' })[j.state]}</span>${j.state === 'running' ? `<button class="btn btn-sm" data-jc="${esc(j.id)}">Cancelar</button>` : ''}</div>
+  <div class="pbar"><i style="width:${Math.round(j.progress * 100)}%"></i></div>
+  <div class="mut small">${Math.round(j.progress * 100)}%${etaOf(j)} · ${j.type === 'offload' ? `${j.added.toLocaleString('es')} copiados · ${j.deleted.toLocaleString('es')} borrados del servidor` : `${j.added.toLocaleString('es')} importados`} · ${j.skipped.toLocaleString('es')} ya estaban${j.failed ? ` · <span class="err">${j.failed.toLocaleString('es')} con error</span>` : ''}</div>
+  ${j.detail ? `<div class="mut small">${esc(j.detail)}</div>` : ''}${j.errors.length ? `<div class="err small">${esc(j.errors.slice(0, 3).join(' · '))}</div>` : ''}</div>`;
+async function pollJobs() {
+  try {
+    const list = await api('/api/archive/jobs'), run = list.filter(j => j.state === 'running'), chip = $('#jobchip');
+    if (chip) { chip.hidden = !run.length; if (run.length) $('#jobtxt').textContent = `${run[0].type === 'offload' ? 'Moviendo' : 'Importando'} ${Math.round(run[0].progress * 100)}%${run.length > 1 ? ' (+' + (run.length - 1) + ')' : ''}`; }
+    const box = $('#jobs'); if (box) { box.innerHTML = list.length ? list.slice(0, 6).map(jobCard).join('') : '<p class="mut small">Aún no hay tareas.</p>'; $$('[data-jc]').forEach(b => b.onclick = () => api('/api/archive/jobs/' + b.dataset.jc + '/cancel', {}).then(pollJobs)); }
+    if (S.prevRunning > run.length) { S.arch = await api('/api/archive/stats').catch(() => S.arch); await folders(); }
+    S.prevRunning = run.length;
+  } catch { /* sin servidor */ }
+}
+async function tabArchivo(c) {
+  const [st, accts] = await Promise.all([api('/api/archive/stats'), api('/api/accounts')]); S.arch = st;
+  const desktop = !!window.casamailDesktop; let picked = null;
+  c.innerHTML = `<h3>Archivo local</h3><p class="lead">Guarda correo en <b>tu propio disco, sin la cuota de ningún proveedor</b>: lo único que lo limita es el espacio libre. Importa tus PST antiguos (incluso de 50 GB), lleva aquí el correo viejo de tus cuentas para liberar espacio y descárgalo cuando quieras.</p>
+    <div class="stats"><div class="stat"><b>${st.messages.toLocaleString('es')}</b><span>mensajes</span></div><div class="stat"><b>${st.folders.toLocaleString('es')}</b><span>carpetas</span></div><div class="stat"><b>${fmtSize(st.storedBytes)}</b><span>ocupan en disco</span></div><div class="stat"><b>${st.freeBytes == null ? '—' : fmtSize(st.freeBytes)}</b><span>libres en ese disco</span></div></div>
+    <div class="note">${I('hdd')}<span><b>Ubicación:</b> <code>${esc(st.dir)}</code>${st.messages ? '<br>Para cambiarla, vacía antes el archivo.' : '<br>Está vacío: antes de importar un PST enorme puedes elegir otra unidad (p. ej. un disco externo).'}</span></div>
+    ${st.messages ? '' : `<div class="row" style="margin-top:0"><input id="locp" class="field" style="flex:1" placeholder="Ruta completa, p. ej. D:\\CasaMail  ·  /mnt/disco/casamail">${desktop ? '<button class="btn" id="locpick">Elegir carpeta…</button>' : ''}<button class="btn" id="locgo">Usar esta ubicación</button></div><div id="locst" class="small"></div>`}
+    <h4>Importar</h4>
+    ${desktop ? `<div class="row" style="margin-top:0"><button class="btn btn-primary" id="pick">${I('upload')} Elegir archivo… (PST, OST, MBOX, EML)</button><span id="picked" class="mut"></span></div>`
+      : `<label class="lb" style="margin-top:0">Ruta completa del archivo en este equipo</label><input id="ipath" class="field" placeholder="D:\\Correo\\antiguo.pst  ·  /home/yo/antiguo.pst" autocomplete="off">`}
+    <label class="lb">Guardar en la carpeta del archivo</label><input id="ifold" class="field" value="Importado" style="max-width:340px">
+    <div class="row"><button class="btn btn-primary" id="igo">Importar</button>${desktop ? '' : `<span class="mut">o</span><label class="btn" for="ifile">Subir el archivo (hace una copia temporal)</label><input type="file" id="ifile" accept=".pst,.ost,.mbox,.mbx,.eml" hidden>`}<span id="ist" class="mut"></span></div>
+    <p class="mut small">Los archivos grandes se leen <b>directamente de donde están, sin copiarlos</b>. Puedes cerrar esta ventana: la importación sigue en segundo plano, el equipo no se duerme mientras tanto y, si se interrumpe, al repetirla se retoma sin duplicar lo ya guardado. Se importa el correo (calendario, contactos y tareas se omiten).</p>
+    <h4>Tareas</h4><div id="jobs"></div>
+    <h4>Descargar (exportar)</h4>
+    <div class="row" style="margin-top:0"><select id="xsrc" class="field" style="width:auto"><option value="${LOCAL}">Archivo local</option>${accts.map(a => `<option value="${esc(a.id)}">${esc(a.email)}</option>`).join('')}</select><select id="xfol" class="field" style="width:auto;max-width:260px"></select><a class="btn btn-primary" id="xgo" href="#" download>${I('download')} Descargar .mbox</a></div>
+    <p class="mut small">El .mbox lo abren Thunderbird y Apple Mail directamente, y Outlook con un importador. <b>No se puede exportar a .PST:</b> es un formato propietario de Microsoft que solo Outlook sabe escribir.</p>
+    ${accts.length ? `<h4>Liberar espacio de una cuenta</h4><p class="mut small" style="margin-top:0">Lleva el correo viejo de tu cuenta al archivo local. Por defecto <b>solo copia</b>; si eliges borrar, cada mensaje se borra del servidor únicamente después de comprobar que quedó guardado y que, al releerlo del disco, es idéntico.</p>
+      <div class="row" style="margin-top:6px"><select id="osrc" class="field" style="width:auto">${accts.map(a => `<option value="${esc(a.id)}" data-p="${esc(a.provider || '')}" data-e="${esc(a.email)}">${esc(a.email)}</option>`).join('')}</select><select id="ofol" class="field" style="width:auto;max-width:220px"></select>
+      <select id="oage" class="field" style="width:auto"><option value="">Todo el correo</option><option value="90">Más antiguo de 3 meses</option><option value="180">Más antiguo de 6 meses</option><option value="365" selected>Más antiguo de 1 año</option><option value="730">Más antiguo de 2 años</option></select></div>
+      <label class="row" style="gap:8px;cursor:pointer"><input type="checkbox" id="odel"> Después de guardarlo, borrarlo del servidor para liberar espacio</label>
+      <div class="note warn" id="onote" hidden>${I('shield')}<span>En <b>Gmail</b>, borrar de una carpeta no libera espacio hasta vaciar también <b>Todos</b> y <b>Papelera</b>.</span></div>
+      <div class="row"><button class="btn btn-primary" id="ogo">Mover al archivo local</button><span id="ost2" class="mut"></span></div>` : ''}`;
+
+  // ubicación
+  if (!st.messages) {
+    const lp = $('#locpick'); if (lp) lp.onclick = async () => { const d = await window.casamailDesktop.pickFolder(); if (d) $('#locp').value = d; };
+    $('#locgo').onclick = async () => { try { const r = await api('/api/archive/location', { dir: $('#locp').value }); $('#locst').innerHTML = `<span class="ok">Listo: ${esc(r.dir)}</span>`; tabArchivo(c); } catch (e) { $('#locst').innerHTML = `<span class="err">${esc(e.message)}</span>`; } };
+  }
+  // importar
+  const startImport = async (force) => {
+    const body = { folder: $('#ifold').value || 'Importado', force: !!force };
+    if (desktop) { if (!picked) { $('#ist').innerHTML = '<span class="err">Primero elige un archivo.</span>'; return; } body.token = picked.token; } else body.path = $('#ipath').value;
+    try { await api('/api/archive/import-path', body); $('#ist').innerHTML = '<span class="ok">Importando… puedes seguir usando CasaMail.</span>'; picked = null; if ($('#picked')) $('#picked').textContent = ''; pollJobs(); }
+    catch (e) { if (e.code === 'low_space' && confirm(e.message + '\n\n¿Continuar de todos modos?')) return startImport(true); $('#ist').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+  };
+  if (desktop) $('#pick').onclick = async () => { const f = await window.casamailDesktop.pickImportFile(); if (f) { picked = f; $('#picked').textContent = `${f.name} · ${fmtSize(f.size)}`; $('#ist').textContent = ''; } };
+  $('#igo').onclick = () => startImport(false);
+  const up = $('#ifile'); if (up) up.onchange = e => {
+    const f = e.target.files[0]; if (!f) return; const x = new XMLHttpRequest();
+    x.open('PUT', `/api/archive/upload?filename=${encodeURIComponent(f.name)}&folder=${encodeURIComponent($('#ifold').value || 'Importado')}`); x.setRequestHeader('Content-Type', 'application/octet-stream');
+    x.upload.onprogress = ev => { if (ev.lengthComputable) $('#ist').textContent = `Subiendo ${Math.round(ev.loaded / ev.total * 100)}%…`; };
+    x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch { /* */ } if (x.status === 200) { $('#ist').innerHTML = '<span class="ok">Subido. Importando…</span>'; pollJobs(); } else $('#ist').innerHTML = `<span class="err">${esc(j.error || 'Error ' + x.status)}</span>`; };
+    x.onerror = () => { $('#ist').innerHTML = '<span class="err">No se pudo subir el archivo.</span>'; }; x.send(f);
+  };
+  // exportar
+  const loadFolders = async (sel, acct, all) => { try { const f = await api('/api/folders?account=' + encodeURIComponent(acct)); sel.innerHTML = (all ? '<option value="">(todo el archivo)</option>' : '') + f.map(x => `<option value="${esc(x.path)}">${esc(x.path)}</option>`).join(''); } catch { sel.innerHTML = ''; } };
+  const setX = () => { $('#xgo').href = `/api/export?account=${encodeURIComponent($('#xsrc').value)}&folder=${encodeURIComponent($('#xfol').value)}`; };
+  $('#xsrc').onchange = async () => { await loadFolders($('#xfol'), $('#xsrc').value, $('#xsrc').value === LOCAL); setX(); }; $('#xfol').onchange = setX;
+  await loadFolders($('#xfol'), LOCAL, true); setX();
+  // liberar espacio
+  if (accts.length) {
+    const onote = () => { const o = $('#osrc').selectedOptions[0]; $('#onote').hidden = !(o.dataset.p === 'google' || /gmail|googlemail/i.test(o.dataset.e || '')); };
+    $('#osrc').onchange = async () => { await loadFolders($('#ofol'), $('#osrc').value, false); onote(); }; await loadFolders($('#ofol'), $('#osrc').value, false); onote();
+    $('#ogo').onclick = async () => {
+      const del = $('#odel').checked; if (del && !confirm('Se guardarán los mensajes en tu disco y, solo si se comprueba que quedaron bien, se BORRARÁN del servidor. ¿Continuar?')) return;
+      try { await api('/api/archive/offload', { account: $('#osrc').value, folder: $('#ofol').value, olderThanDays: Number($('#oage').value) || undefined, deleteFromServer: del }); $('#ost2').innerHTML = '<span class="ok">En marcha: mira el progreso en Tareas.</span>'; pollJobs(); } catch (e) { $('#ost2').innerHTML = `<span class="err">${esc(e.message)}</span>`; }
+    };
+  }
+  await pollJobs(); modalTimer = setInterval(pollJobs, 1500);
+}
+setInterval(pollJobs, 4000);
 $('#side').addEventListener('click', e => {
   const n = e.target.closest('.nav'); if (!n) return; document.body.classList.remove('menu');
   if (n.dataset.sched) return settings('salida');
+  if (n.dataset.import || n.dataset.jobs) return settings('archivo');
   if (n.dataset.newf) { const nm = prompt('Nombre de la carpeta'); if (nm) api(`/api/folders?account=${encodeURIComponent(S.acct)}`, { name: nm }).then(folders).catch(fail); return; }
   if (n.dataset.p) { S.folder = n.dataset.p; S.aiq = null; S.filter = ''; S.cur = null; resetView(); folders(); list(); }
 });

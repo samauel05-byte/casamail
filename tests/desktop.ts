@@ -35,6 +35,30 @@ check("no tiene Node.js expuesto a la página (aislamiento)", await win.evaluate
 check("candado del planificador tomado por la app", fs.existsSync(path.join(HOME, "scheduler.lock")));
 
 await app.evaluate(({ shell }) => { (globalThis as unknown as { opened: string[] }).opened = []; shell.openExternal = async (u: string) => { (globalThis as unknown as { opened: string[] }).opened.push(u); }; });
+// Archivo local: selector nativo -> token de un solo uso -> importación SIN copiar el archivo
+const bridge = await win.evaluate(() => Object.keys((window as unknown as { casamailDesktop?: object }).casamailDesktop ?? {}).sort());
+check("el puente seguro solo expone los dos selectores nativos", JSON.stringify(bridge) === JSON.stringify(["pickFolder", "pickImportFile"]));
+const importVia = async (file: string, folder: string) => {
+  await app.evaluate(({ dialog }, f) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [f] })) as never; }, file);
+  const pick = await win.evaluate(() => (window as unknown as { casamailDesktop: { pickImportFile(): Promise<{ token: string; name: string; size: number }> } }).casamailDesktop.pickImportFile());
+  const post = (t: string) => win.evaluate(async ({ t, folder }) => (await fetch("/api/archive/import-path", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token: t, folder }) })).json(), { t, folder });
+  const first = await post(pick.token) as { job?: string; error?: string };
+  let job: { state: string; added: number; processed: number } = { state: "running", added: 0, processed: 0 };
+  for (let i = 0; i < 120 && job.state === "running"; i++) { await new Promise((r) => setTimeout(r, 250)); job = await win.evaluate(async (id) => (await fetch(`/api/archive/jobs/${id}`)).json(), first.job!); }
+  const second = await post(pick.token) as { error?: string };
+  return { pick, first, job, second };
+};
+const mb = path.join(HOME, "muestra.mbox");
+fs.writeFileSync(mb, "From - Mon Mar  2 09:00:00 2026\nFrom: a@x.com\nTo: b@y.com\nSubject: Desde escritorio\nDate: Mon, 02 Mar 2026 09:00:00 +0000\n\nHola\n");
+const r1 = await importVia(mb, "Escritorio");
+check("el selector nativo devuelve un token (no la ruta) y el tamaño", !!r1.pick.token && !JSON.stringify(r1.pick).includes(HOME) && r1.pick.size > 50 && r1.pick.name === "muestra.mbox");
+check("importa desde su ubicación: SQLite integrado funciona dentro de Electron", r1.job.state === "done" && r1.job.added === 1);
+check("el token es de un solo uso y el original no se borra", /caducó/.test(r1.second.error ?? "") && fs.existsSync(mb));
+if (process.env.PST_SAMPLE && fs.existsSync(process.env.PST_SAMPLE)) {
+  const r2 = await importVia(process.env.PST_SAMPLE, "PSTDesktop");
+  check("PST/OST real importado desde la app de escritorio (13 correos)", r2.job.state === "done" && r2.job.added === 13);
+}
+
 // OAuth: la autorización de Google se abre en el navegador del sistema y la conexión se completa en la app
 await win.click("#cfg"); await win.click('[data-add="google"]'); await win.waitForSelector("#ocid");
 await win.fill("#ocid", "mock-client"); await win.fill("#ocs", "shh");

@@ -4,13 +4,36 @@
  * Arranca el servidor local de CasaMail dentro de la app y lo muestra en una ventana propia.
  * Los datos siguen en ~/.casamail (compartidos con la línea de comandos y el servidor MCP).
  */
-const { app, BrowserWindow, Tray, Menu, shell, nativeImage, Notification, session, dialog } = require('electron');
+const { app, BrowserWindow, Tray, Menu, shell, nativeImage, Notification, session, dialog, ipcMain, powerSaveBlocker } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { pathToFileURL } = require('node:url');
 
 app.setAppUserModelId('app.casamail.desktop');
+
+/** Selectores nativos: el usuario elige el archivo (p. ej. un PST de 50 GB) y la app lo lee SIN copiarlo. */
+function trustedSender(e) { try { return !!srv && e.senderFrame.url.startsWith(srv.origin); } catch { return false; } }
+ipcMain.handle('casamail:pick-file', async (e) => {
+  if (!trustedSender(e)) return null;
+  const r = await dialog.showOpenDialog(win, { title: 'Elige el archivo de correo a importar', properties: ['openFile'], filters: [{ name: 'Correo (PST, OST, MBOX, EML)', extensions: ['pst', 'ost', 'mbox', 'mbx', 'eml'] }, { name: 'Todos', extensions: ['*'] }] });
+  if (r.canceled || !r.filePaths[0]) return null;
+  const file = r.filePaths[0];
+  return { token: srv.allowImportPath(file), name: path.basename(file), size: fs.statSync(file).size };
+});
+ipcMain.handle('casamail:pick-folder', async (e) => {
+  if (!trustedSender(e)) return null;
+  const r = await dialog.showOpenDialog(win, { title: 'Elige dónde guardar el archivo local (p. ej. un disco externo)', properties: ['openDirectory', 'createDirectory'] });
+  return r.canceled ? null : r.filePaths[0];
+});
+
+// Una importación puede durar horas: que el equipo no se duerma mientras tanto.
+let blocker = null;
+setInterval(() => {
+  const n = srv ? srv.activeJobs() : 0;
+  if (n > 0 && blocker === null) blocker = powerSaveBlocker.start('prevent-app-suspension');
+  else if (n === 0 && blocker !== null) { powerSaveBlocker.stop(blocker); blocker = null; }
+}, 5000).unref();
 
 const dataDir = process.env.CASAMAIL_HOME || path.join(os.homedir(), '.casamail');
 const prefsFile = path.join(dataDir, 'desktop.json');
@@ -20,7 +43,7 @@ const readPrefs = () => { try { return { ...defaults, ...JSON.parse(fs.readFileS
 const writePrefs = () => { try { fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 }); fs.writeFileSync(prefsFile, JSON.stringify(prefs), { mode: 0o600 }); } catch { /* sin permisos */ } };
 
 let prefs = readPrefs();
-let win = null, tray = null, srv = null, quitting = false;
+let win = null, tray = null, srv = null, quitting = false, forceQuit = false;
 const iconPath = path.join(__dirname, '..', 'build', 'icon.png');
 const trayIconPath = path.join(__dirname, '..', 'build', 'tray.png');
 
@@ -46,7 +69,7 @@ function createWindow() {
   win = new BrowserWindow({
     width: 1360, height: 860, minWidth: 420, minHeight: 560, show: false, title: 'CasaMail',
     backgroundColor: '#eef3f9', icon: iconPath, autoHideMenuBar: true,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: true },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: true, preload: path.join(__dirname, 'preload.cjs') },
   });
   win.once('ready-to-show', () => win && win.show());
   win.loadURL(srv.url);
@@ -95,7 +118,15 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on('second-instance', showWindow);
   app.on('activate', showWindow);
-  app.on('before-quit', () => { quitting = true; });
+  app.on('before-quit', (e) => {
+    if (srv && srv.activeJobs() > 0 && !forceQuit) {
+      const c = dialog.showMessageBoxSync({ type: 'warning', buttons: ['Seguir importando', 'Salir de todos modos'], defaultId: 0, cancelId: 0, title: 'Hay una tarea en curso',
+        message: 'CasaMail está importando o moviendo correo.', detail: 'Si sales ahora se detendrá. No pasa nada grave: al volver a importar el mismo archivo se retoma sin repetir lo ya guardado.' });
+      if (c === 0) { e.preventDefault(); quitting = false; return; }
+      forceQuit = true;
+    }
+    quitting = true;
+  });
   app.on('window-all-closed', () => { if (!prefs.background) app.quit(); });
   // Al salir, parar el servidor limpiamente (suelta el candado del planificador).
   app.on('will-quit', (e) => { if (srv) { const s = srv; srv = null; e.preventDefault(); s.close().finally(() => app.quit()); } });

@@ -28,6 +28,9 @@ Yerleny resume, redacta, reescribe/traduce, sugiere respuestas, busca en lenguaj
 - **Memoria y personalidad**: tu nombre, idioma, estilo y notas ("firmo como Sam"). Cuando le pides *"recuerda que…"* te muestra la nota y **solo la guarda si confirmas** (así un correo malicioso no puede enseñarle instrucciones permanentes).
 - El contenido de los correos que uses con Yerleny se envía al proveedor del modelo; con Ollama no sale de tu equipo.
 
+## Archivo local (PST, MBOX y sin límite de espacio)
+Guarda correo **en tu disco, sin cuota de ningún proveedor** (solo te limita el espacio libre; puedes elegir otra unidad). Importa **PST/OST de Outlook** (incluso de decenas de GB, leídos sin copiarlos y retomables), MBOX y EML; descarga carpetas como **MBOX**; y mueve el correo viejo de tus cuentas al archivo para **liberar espacio** (por defecto solo copia; si borras del servidor, solo tras verificar cada copia). Búsqueda de texto completo instantánea. **No exporta a .PST** (formato propietario de Microsoft). Detalles y límites verificados: [docs/ARCHIVO.md](docs/ARCHIVO.md).
+
 ## Correo
 Varias cuentas y bandeja unificada, carpetas, hilos, búsqueda, adjuntos, firma, borradores, archivar/spam/papelera, posponer, programar envío, paleta de comandos (`Ctrl/⌘ K`), atajos (`C` `/` `J` `K` `R` `E` `#` `S`), modo claro/oscuro y diseño adaptable a móvil.
 
@@ -50,8 +53,8 @@ Claude Desktop / Cursor / Cline:
 
 ## Pruebas
 ```bash
-npm test                              # 50 pruebas: IMAP/SMTP/XOAUTH2 reales de prueba, OAuth, retirada de mensajes, Yerleny
+npm test                              # 69 pruebas: IMAP/SMTP/XOAUTH2 reales de prueba, OAuth, retirada de mensajes, Yerleny
 PW_PATH=<ruta a playwright> npx tsx tests/ui.ts   # 42 comprobaciones en un navegador real
-npm run test:desktop                  # 15 comprobaciones de la app de escritorio (Electron, necesita xvfb en Linux sin pantalla)
+npm run test:desktop                  # 19 comprobaciones de la app de escritorio (Electron, necesita xvfb en Linux sin pantalla)
 ```
 Las pruebas de OAuth usan un proveedor falso local; **no se han probado contra Google o Microsoft reales** (necesitan tus credenciales). Los instaladores de Windows y macOS los genera GitHub Actions y **no se han probado aún en esos sistemas** (el empaquetado y la prueba se hicieron en Linux).
