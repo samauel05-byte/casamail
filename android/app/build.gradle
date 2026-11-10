@@ -1,0 +1,39 @@
+plugins { id("com.android.application") }
+
+// Versión: la fija el flujo de GitHub (ANDROID_VERSION_CODE) o, en local, 1. Cada subida a Google Play necesita un código MAYOR que el anterior.
+def vcode = (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInteger()
+def vname = System.getenv("ANDROID_VERSION_NAME") ?: "0.3.0"
+
+android {
+    namespace = "app.casamail.movil"
+    compileSdk = 35
+    defaultConfig {
+        applicationId = "app.casamail.movil"
+        minSdk = 24
+        targetSdk = 35
+        versionCode = vcode
+        versionName = vname
+    }
+    signingConfigs {
+        // Clave de subida (upload key). Solo se usa si el flujo recibe los secretos; si no, el APK sale firmado con la clave de depuración.
+        create("upload") {
+            def ks = System.getenv("CASAMAIL_KEYSTORE")
+            if (ks) {
+                storeFile = file(ks)
+                storePassword = System.getenv("CASAMAIL_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("CASAMAIL_KEY_ALIAS")
+                keyPassword = System.getenv("CASAMAIL_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (System.getenv("CASAMAIL_KEYSTORE")) signingConfig = signingConfigs.getByName("upload")
+        }
+    }
+    compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+    lint { abortOnError = false }
+}
