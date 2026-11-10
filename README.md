@@ -24,7 +24,7 @@ Añade tu cuenta desde ⚙ Ajustes → Cuentas, o por CLI (`npm run cli -- add`)
 
 ## Yerleny, la IA de CasaMail
 Yerleny resume, redacta, reescribe/traduce, sugiere respuestas, busca en lenguaje natural, prioriza la bandeja y chatea contigo: busca y lee tu correo y **prepara borradores que tú revisas; nunca envía sola**.
-- **Piensa con el modelo que le conectes** (Ajustes → Yerleny): Claude, OpenAI, Gemini, Groq, OpenRouter, DeepSeek, Mistral o **Ollama / LM Studio en local (gratis y privado)**, con detección automática de Ollama. Es honesta sobre ello: si le preguntas qué modelo usa, lo dice.
+- **Gratis desde el primer minuto:** un **motor integrado** (modelos abiertos Apache-2.0 que corren en tu equipo: sin cuenta, sin clave, sin internet, privado), proveedores con **capa gratuita** (Gemini, Groq, OpenRouter, Cerebras) con detección de modelos en vivo, u Ollama / LM Studio. Puedes tener **varios motores con respaldo automático** (si uno falla, prueba el siguiente). También Claude, OpenAI, DeepSeek o Mistral con tu clave. Es honesta sobre ello: si le preguntas qué modelo usa, lo dice. El integrado es más limitado que los de la nube: cifras y límites reales en [docs/MOTORES-IA.md](docs/MOTORES-IA.md).
 - **Memoria y personalidad**: tu nombre, idioma, estilo y notas ("firmo como Sam"). Cuando le pides *"recuerda que…"* te muestra la nota y **solo la guarda si confirmas** (así un correo malicioso no puede enseñarle instrucciones permanentes).
 - El contenido de los correos que uses con Yerleny se envía al proveedor del modelo; con Ollama no sale de tu equipo.
 
@@ -53,7 +53,7 @@ Claude Desktop / Cursor / Cline:
 
 ## Pruebas
 ```bash
-npm test                              # 69 pruebas: IMAP/SMTP/XOAUTH2 reales de prueba, OAuth, retirada de mensajes, Yerleny
+npm test                              # 84 pruebas (con LLM_DIR/PST_SAMPLE, también modelo y PST reales): IMAP/SMTP/XOAUTH2 reales de prueba, OAuth, retirada de mensajes, Yerleny
 PW_PATH=<ruta a playwright> npx tsx tests/ui.ts   # 42 comprobaciones en un navegador real
 npm run test:desktop                  # 19 comprobaciones de la app de escritorio (Electron, necesita xvfb en Linux sin pantalla)
 ```
