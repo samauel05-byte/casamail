@@ -352,7 +352,12 @@ app.post("/api/ai/local/download", h(async (r) => { await localLlm.startDownload
 app.post("/api/ai/local/cancel", h(async () => { localLlm.cancelDownload(); return localLlm.downloadStatus(); }));
 app.delete("/api/ai/local/:id", h(async (r) => { await localLlm.removeModel(r.params.id); return { ok: true }; }));
 app.post("/api/ai/test", h(async (r) => {
-  const id = (r.body as { engineId?: string } | undefined)?.engineId;
+  const b = (r.body ?? {}) as { engineId?: string; engine?: store.AiConfig };
+  const id = b.engineId;
+  if (b.engine) { // probar sin guardar: la clave escrita en pantalla solo se usa para esta prueba
+    if (!store.aiValid(b.engine)) throw new Error("Faltan datos del motor (URL y modelo).");
+    return { reply: await ai.testEngine(b.engine), engine: ai.engineLabel(b.engine) };
+  }
   if (id) { const e = store.getAiEngines().find((x) => x.id === id); if (!e) throw new Error("Motor no encontrado"); return { reply: await ai.testEngine(e), engine: ai.engineLabel(e) }; }
   return { reply: await ai.testAi() };
 }));

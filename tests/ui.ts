@@ -153,7 +153,7 @@ check("el servidor no se tocó (solo copia)", (await (await pg.request.get(`${BA
 await pg.click("#mx"); await pg.selectOption("#acct", "t"); await pg.waitForSelector(".m");
 
 step("ajustes de Yerleny");
-await pg.click("#cfg"); await pg.click('#mbox [data-tab="ia"]'); await pg.waitForSelector("#ap");
+await pg.click("#cfg"); await pg.click('#mbox [data-tab="ia"]'); await pg.click('summary:has-text("Avanzado")'); await pg.waitForSelector("#ap");
 check("ajustes con proveedores de IA", (await pg.locator("#ap option").count()) >= 8);
 check("la pestaña se llama Yerleny y lista lo que recuerda", (await pg.textContent("#mbox .set-nav"))!.includes("Yerleny") && (await pg.textContent("#ynotes"))!.includes("Firmo mis correos como Sam"));
 await pg.fill("#yn", "Sam"); await pg.selectOption("#yt", "cercano y amable"); await pg.click("#ys"); await pg.waitForSelector("#yst:has-text('Guardado')");
@@ -164,6 +164,44 @@ await pg.locator("[data-rn]").first().click(); await pg.waitForFunction(() => !d
 check("añadir y olvidar notas", (await notesApi()).length === 1 && (await notesApi())[0] === "Mi jefa es Marta Ruiz");
 await pg.selectOption("#ap", "ollama"); await pg.click("#ad"); await pg.waitForSelector("#ast:has-text('Ollama detectado: 2 modelos')");
 check("detecta Ollama y propone sus modelos", (await pg.inputValue("#am")) === "llama3.1:8b");
+step("motores de IA: lista con respaldo y motor integrado");
+const engApi = async () => (await (await pg.request.get(`${BASE}/api/ai/engines`)).json()) as { id: string; model: string; apiKey: string; hasKey: boolean; provider: string }[];
+check("la lista muestra el motor actual como Principal", (await pg.locator("#englist .acct-row").count()) === 1 && (await pg.textContent("#englist"))!.includes("Principal"));
+await pg.click("#englist [data-test]"); await pg.waitForSelector("#englist .ok:has-text('funciona')");
+check("'Probar' comprueba ese motor", (await pg.textContent("#englist"))!.includes("OK"));
+check("tarjetas del motor integrado: 2 modelos y uno recomendado para este equipo", (await pg.locator("#localbox .tier").count()) === 2 && (await pg.locator("#localbox .badge:has-text('Recomendado')").count()) === 1);
+check("el motor integrado se descarga una sola vez (botón) y nombra la licencia", (await pg.locator("[data-ldl]").count()) === 2 && (await pg.textContent("#localbox"))!.includes("Apache-2.0"));
+await pg.selectOption("#ap", "custom"); await pg.fill("#au", "http://127.0.0.1:1199/v1"); await pg.fill("#am", "respaldo-y"); await pg.click("#aa");
+await pg.waitForFunction(() => document.querySelectorAll("#englist .acct-row").length === 2);
+check("añadir un respaldo: queda segundo, marcado como Respaldo", (await pg.locator("#englist .acct-row").nth(1).textContent())!.includes("Respaldo"));
+await pg.click('#englist [data-up="1"]'); await pg.waitForFunction(() => document.querySelector("#englist .acct-row")!.textContent!.includes("respaldo-y"));
+check("reordenar: el de respaldo pasa a ser el principal (y se guarda)", (await engApi())[0].model === "respaldo-y");
+const withKey = await (await pg.request.post(`${BASE}/api/ai/engines`, { data: { engines: [{ ...(await engApi())[0], apiKey: "sk-secreta-1234" }, ...(await engApi()).slice(1)] } })).json();
+check("las claves se devuelven enmascaradas", withKey[0].apiKey === "••••1234" && !JSON.stringify(withKey).includes("sk-secreta"));
+const kept = await (await pg.request.post(`${BASE}/api/ai/engines`, { data: { engines: withKey } })).json();
+check("reenviar la clave enmascarada conserva la guardada", kept[0].hasKey === true && JSON.parse(fs.readFileSync(path.join(process.env.CASAMAIL_HOME!, "ai.json"), "utf8")).engines[0].apiKey === "sk-secreta-1234");
+check("sin cookie no se pueden leer los motores (401)", (await fetch(`${BASE}/api/ai/engines`)).status === 401 && (await fetch(`${BASE}/api/ai/local`)).status === 401);
+await pg.locator("#englist [data-rm]").first().click(); await pg.waitForFunction(() => document.querySelectorAll("#englist .acct-row").length === 1);
+check("quitar un motor", (await engApi()).length === 1);
+await pg.click('[data-cloud="gemini"]'); await pg.waitForSelector("#ck");
+check("proveedor gratuito en la nube: enlace para conseguir la clave y aviso de límites", (await pg.getAttribute("#cloudpane a", "href"))!.includes("aistudio.google.com") && (await pg.textContent("#cloudpane"))!.includes("pueden cambiar"));
+await pg.click("#cadd"); await pg.waitForSelector("#cst:has-text('Pega primero tu clave')");
+check("no deja añadir sin clave", (await engApi()).length === 1);
+if (process.env.UI_LIVE) {
+  await pg.click('[data-cloud="openrouter"]'); await pg.click("#cdet"); await pg.waitForSelector("#cmod option:nth-child(2)", { timeout: 20000 });
+  const opts = await pg.locator("#cmod option").allTextContents();
+  check("EN VIVO: OpenRouter detecta modelos gratuitos y elige uno gratuito con herramientas", opts.some((o) => o.includes(":free · gratis")) && (await pg.inputValue("#cmod")).endsWith(":free"));
+}
+if (process.env.UI_REAL_LLM) {
+  await pg.click("[data-ldl]"); await pg.waitForSelector("#localbox .pbar", { timeout: 15000 });
+  check("descarga REAL del modelo integrado desde la interfaz, con barra de progreso", true);
+  await pg.waitForSelector("[data-luse]", { timeout: 180000 }); await pg.click("[data-luse]");
+  await pg.waitForFunction(() => document.querySelectorAll("#englist .acct-row").length === 2, null, { timeout: 15000 });
+  check("el modelo descargado se añade como motor integrado (en tu equipo, gratis)", (await engApi()).some((e) => e.provider === "local"));
+  await pg.locator("#englist [data-test]").nth(1).click(); await pg.waitForSelector("#englist .ok:has-text('funciona')", { timeout: 60000 });
+  check("el motor integrado responde de verdad", true);
+  await pg.locator("#englist [data-rm]").nth(1).click(); await pg.waitForFunction(() => document.querySelectorAll("#englist .acct-row").length === 1);
+}
 await pg.click("#mx");
 await pg.click("#asst"); await pg.waitForSelector(".bub.bot");
 check("el saludo usa tu nombre", (await pg.textContent("#chat"))!.includes("Hola, Sam"));
