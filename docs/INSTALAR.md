@@ -25,6 +25,15 @@ Los instaladores **no están firmados con un certificado de pago**, así que el 
 - *Iniciar con el sistema* se activa desde el icono de la bandeja (Windows y macOS).
 - Linux: algunos escritorios no muestran bandeja; ahí cerrar la ventana cierra la app (se puede cambiar desde el menú de la bandeja si está disponible).
 
+## Si algo falla
+CasaMail guarda un **registro de errores local** (no se envía a ningún sitio). Antes de guardarlo se ocultan claves, tokens, contraseñas, enlaces de acceso, tu carpeta personal y la parte local de los emails; **nunca guarda el contenido de tus correos**.
+
+Para pedir ayuda, en el menú **Ayuda**:
+- **Copiar información de diagnóstico**: copia al portapapeles la versión, tu sistema y las últimas líneas del registro. Pégalo en el mensaje donde pidas ayuda.
+- **Abrir carpeta de registros**: abre la carpeta con el archivo completo (`casamail.log`). Si la app no llega a abrir ninguna ventana, el icono de la bandeja del sistema tiene la misma opción.
+
+El registro está en `~/.casamail/logs/` (en Windows: `C:\Users\TuUsuario\.casamail\logs`). Si la app se cierra de golpe por un fallo del sistema, el volcado queda en `logs/crashes/`. Se renueva solo al llegar a 2 MB.
+
 ## Dónde se guardan tus datos
 `~/.casamail/` (en Windows: `C:\Users\TuUsuario\.casamail`). Es la misma carpeta que usan la línea de comandos y el servidor MCP, así que comparten cuentas.
 Desinstalar la app **no borra** esa carpeta; bórrala a mano si quieres eliminar cuentas y configuración.

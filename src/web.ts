@@ -45,7 +45,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 });
 
 const h = (fn: (req: Request) => Promise<unknown>) => (req: Request, res: Response) =>
-  fn(req).then((d) => res.json(d), (e) => res.status(500).json({ error: e instanceof Error ? e.message : String(e), code: e instanceof oauth.ReauthError ? "reauth" : (e as { code?: string }).code === "low_space" ? "low_space" : undefined }));
+  fn(req).then((d) => res.json(d), (e) => { console.warn(`[api] ${req.method} ${req.path} → ${e instanceof Error ? e.message : String(e)}`); res.status(500).json({ error: e instanceof Error ? e.message : String(e), code: e instanceof oauth.ReauthError ? "reauth" : (e as { code?: string }).code === "low_space" ? "low_space" : undefined }); });
 const acc = (req: Request) => store.getAccount((req.query.account as string) || undefined);
 const folder = (req: Request) => (req.query.folder as string) || "INBOX";
 const uidOf = (req: Request) => Number(req.params.uid);
