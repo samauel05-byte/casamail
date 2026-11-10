@@ -50,17 +50,21 @@ export function startSmtp(port = 1025) {
 
 export const aiCalls: string[] = [];
 export const lastSystem = { text: "" };
+export const fakeStats = { total: 0, toolRequests: 0 };
 export function startFakeAi(port = 1199) {
   const s = http.createServer((req, res) => {
     let b = ""; req.on("data", (d) => (b += d)); req.on("end", () => {
       const j = JSON.parse(b || "{}");
       const msgs = j.messages as { role: string; content?: string }[];
       const sys = msgs[0]?.content ?? "", last = msgs[msgs.length - 1];
-      aiCalls.push(sys.slice(0, 40)); lastSystem.text = sys;
+      aiCalls.push(sys.slice(0, 40)); lastSystem.text = sys; fakeStats.total++; if (j.tools) fakeStats.toolRequests++;
       const reply = (message: unknown) => { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ choices: [{ message }] })); };
+      if (!j.tools && /Redactas/.test(sys) && msgs.some((m) => (m.content ?? "").includes("FIRMA-YERLENY")))
+        return reply({ content: JSON.stringify({ subject: "Prueba", body: "Hola, esto es una prueba.\n\nGracias por su tiempo.\nYerleny" }) });
       if (j.tools) { // modo asistente
         const toolMsgs = msgs.filter((m) => m.role === "tool").length;
         const lastUser = [...msgs].reverse().find((m) => m.role === "user")?.content ?? "";
+        if (/LO-ENVIASTE/.test(lastUser)) return reply({ content: "Sí, el correo se envió correctamente a emoreno@portovalencia.com." }); // modelo que "miente"
         if (/RECUERDA/.test(lastUser)) {
           const lastIdx = msgs.map((m) => m.role).lastIndexOf("user"); // solo cuenta lo ocurrido desde el último mensaje del usuario
           const sinceUser = msgs.slice(lastIdx + 1).filter((m) => m.role === "tool").length;

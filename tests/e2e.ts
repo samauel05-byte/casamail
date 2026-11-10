@@ -4,7 +4,7 @@ import path from "node:path";
 process.env.CASAMAIL_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "casamail-"));
 process.env.CASAMAIL_ARCHIVE = path.join(process.env.CASAMAIL_HOME, "archive");
 process.env.CASAMAIL_OAUTH_MOCK = "http://127.0.0.1:1300";
-const { startImap, startSmtp, startFakeAi, sentMails, startMockOAuth, oauth: mock, lastSystem } = await import("./servers.js");
+const { startImap, startSmtp, startFakeAi, sentMails, startMockOAuth, oauth: mock, lastSystem, fakeStats } = await import("./servers.js");
 const store = await import("../src/store.js");
 const mail = await import("../src/mail.js");
 const ai = await import("../src/ai.js");
@@ -482,6 +482,48 @@ if (LLM && fs.existsSync(LLM)) {
 } else console.log("  – MODELO REAL: omitidas (define LLM_DIR=/carpeta/con/el/modelo para probarlas)");
 limited.close(); badKey.close(); modelsSrv.close();
 store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });
+
+console.log("\nCorreos del asistente: tu firma, y nunca decir que envió algo");
+store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });
+const hostNoop = { search: async () => ({ total: 0, messages: [] }), read: async () => ({}), folders: async () => [] };
+await t("firma: quita 'Yerleny' de los cierres (los correos los firma el usuario) y no toca el resto", async () => {
+  store.saveYerleny({ userName: "Sam", notes: [] });
+  eq(ai.cleanClosing("Hola.\n\nGracias,\nYerleny"), "Hola.\n\nGracias,"); eq(ai.cleanClosing("Hola.\n\n— Yerleny"), "Hola."); eq(ai.cleanClosing("Texto\n\nEnviado por Yerleny, tu IA de CasaMail"), "Texto");
+  eq(ai.cleanClosing("Hola Ana,\n\nTe escribo por el presupuesto.\n\nSaludos"), "Hola Ana,\n\nTe escribo por el presupuesto.\n\nSaludos", "un correo normal no se altera");
+  const largo = ai.cleanClosing("Le comento que Yerleny me ayudó a revisar el presupuesto con todo detalle y está todo correcto, gracias."); ok(!/yerleny/i.test(largo) && largo.includes("Sam"), largo);
+  store.saveYerleny({ notes: [] });
+});
+await t("redactar: aunque el modelo firme como Yerleny, el borrador sale sin esa firma", async () => {
+  const d = await ai.draft({ instruction: "una prueba FIRMA-YERLENY" }); ok(!/yerleny/i.test(d.body) && d.body.includes("Gracias por su tiempo"), d.body); ok(/EN NOMBRE DEL USUARIO/.test(lastSystem.text) && /SIN firma/.test(lastSystem.text), "el prompt lo exige");
+});
+await t("'envíale un correo a x@y': deja un BORRADOR (no envía), con el destinatario correcto y sin firma de Yerleny", async () => {
+  const sent = sentMails.length, tools = fakeStats.toolRequests;
+  const r = await ai.agent([], "enviale un correo a emoreno@portovalencia.com y dime que es una prueba FIRMA-YERLENY", hostNoop);
+  eq(r.drafts.length, 1); eq(r.drafts[0].to, "emoreno@portovalencia.com"); ok(!/yerleny/i.test(r.drafts[0].body) && r.drafts[0].body.length > 10, r.drafts[0].body);
+  ok(/No se ha enviado nada/.test(r.reply), r.reply); eq(sentMails.length, sent, "NO debe enviar"); eq(fakeStats.toolRequests, tools, "no depende de que el modelo use herramientas");
+  eq(r.history.at(-1)!.role, "assistant");
+});
+await t("si el modelo afirma que envió algo, se corrige: Yerleny no puede enviar", async () => {
+  const r = await ai.agent([], "¿lo enviaste? LO-ENVIASTE", hostNoop); ok(/^No he enviado nada/.test(r.reply) && !/se envió correctamente/.test(r.reply), r.reply);
+  eq((r.history.at(-1) as { text: string }).text, r.reply, "el historial tampoco conserva la mentira");
+  for (const t2 of ["Sí, el correo se envió correctamente.", "Ya lo envié.", "He enviado el mensaje a Ana.", "Mensaje enviado con éxito"]) ok(ai.claimsSent(t2), t2);
+  for (const t2 of ["Aquí tienes el borrador.", "Prepárate: no se ha enviado nada.", "Puedes enviarlo cuando quieras."]) ok(!ai.claimsSent(t2), t2);
+});
+await t("'dame mi resumen del día': lee los no leídos y los resume (sin depender de herramientas del modelo)", async () => {
+  const calls: unknown[] = []; const tools = fakeStats.toolRequests;
+  const r = await ai.agent([], "Dame mi resumen del día", { ...hostNoop, search: async (a) => { calls.push(a); return { total: 2, messages: [{ uid: 1, from: "Ana <ana@e.com>", subject: "Presupuesto", date: "2026-11-10T10:00:00Z" }, { uid: 2, from: "Banco <b@x.com>", subject: "Factura", date: null }] }; } });
+  eq((calls[0] as { unread: boolean }).unread, true); ok(/Tienes 2 correos sin leer/.test(r.reply) && r.reply.includes("Resumen"), r.reply); eq(fakeStats.toolRequests, tools);
+});
+await t("resumen del día sin correos nuevos: lo dice sin molestar al modelo", async () => {
+  const n = fakeStats.total; const r = await ai.agent([], "dame mi resumen del día", hostNoop); ok(/No tienes correos sin leer/.test(r.reply), r.reply); eq(fakeStats.total, n, "no debe llamar a la IA");
+});
+await t("el atajo de redactar solo se activa con peticiones de escribir/enviar, no al leer o buscar", async () => {
+  for (const si of ["enviale un correo a emoreno@portovalencia.com y dime que es una prueba", "mándale un mensaje a ana@x.com", "escríbele un email a ana@x.com diciendo hola", "redacta un correo para ana@x.com", "Envía un mail a ana@x.com"]) ok(ai.isComposeRequest(si), "debería: " + si);
+  for (const no of ["busca el correo de ana@empresa.com sobre el presupuesto", "lee el último mensaje de ana@empresa.com", "¿qué me escribió ana@x.com en su correo?", "enviale un correo a Ana", "resume mis correos"]) ok(!ai.isComposeRequest(no), "no debería: " + no);
+  for (const si of ["Dame mi resumen del día", "resume mis correos", "¿qué tengo de nuevo?", "correos sin leer"]) ok(ai.isDailySummary(si), "resumen: " + si);
+  const tools = fakeStats.toolRequests, sent = sentMails.length; await ai.agent([], "busca el correo de ana@empresa.com sobre el presupuesto", hostNoop);
+  ok(fakeStats.toolRequests > tools, "una búsqueda normal usa el asistente con herramientas"); eq(sentMails.length, sent, "y nunca envía");
+});
 
 console.log("\nRegistro de errores (app de escritorio)");
 const { createRequire } = await import("node:module");
