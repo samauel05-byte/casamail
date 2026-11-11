@@ -817,3 +817,22 @@ document.addEventListener('keydown', e => {
 setInterval(() => { if (document.visibilityState === 'visible' && S.acct && !S.aiq && $('#compose').hidden && $('#modal').hidden) { const sel = S.cur ? S.cur.uid : null; refreshList().then(() => { if (sel) $$('.m').forEach(e => e.classList.toggle('on', e.dataset.u == sel)); }); folders(true); } }, 120000);
 setInterval(outboxCount, 30000);
 init().catch(e => { $('#list').innerHTML = `<div class="empty"><h3>Error</h3><p>${esc(e.message)}</p></div>`; });
+
+/* ---------- actualizaciones ---------- */
+let updChecked = false;
+async function checkUpdate() {
+  if (updChecked) return; updChecked = true;
+  try {
+    // Escritorio: la app descarga la nueva versión sola; cuando está lista, ofrecemos reiniciar para instalar.
+    if (window.casamailDesktop && window.casamailDesktop.onUpdateReady)
+      window.casamailDesktop.onUpdateReady(info => toast(`Actualización ${info && info.version ? info.version : ''} lista para instalar.`, { action: 'Reiniciar', ms: 60000, onAction: () => window.casamailDesktop.installUpdate() }));
+    const u = await api('/api/update').catch(() => null);
+    if (u && u.info && u.info.newer) {
+      const v = u.info.latest;
+      if (window.casamailDesktop) toast(`Descargando la versión nueva (${v})… se instalará cuando reinicies CasaMail.`, { ms: 9000 });
+      else if (window.casaNativo) toast(`Hay una versión nueva de CasaMail (${v}). Actualízala desde Google Play.`, { ms: 12000 });
+      else toast(`Hay una versión nueva de CasaMail (${v}).`, { action: 'Ver', ms: 15000, onAction: () => window.open(u.info.url, '_blank', 'noopener') });
+    }
+  } catch { /* sin conexión o sin cuentas */ }
+}
+setTimeout(checkUpdate, 4000);

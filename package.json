@@ -1,6 +1,6 @@
 {
   "name": "casamail",
-  "version": "0.4.15",
+  "version": "0.4.16",
   "description": "CasaMail: cliente de correo local con Yerleny (IA), Gmail/Outlook con OAuth y servidor MCP",
   "type": "module",
   "bin": {
@@ -23,6 +23,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
     "domhandler": "^5.0.3",
+    "electron-updater": "^6.3.9",
     "express": "^4.21.0",
     "htmlparser2": "^10.1.0",
     "imapflow": "^1.0.0",
@@ -126,6 +127,13 @@
       "node_modules/@node-llama-cpp/**",
       "node_modules/node-llama-cpp/bins/**",
       "node_modules/node-llama-cpp/llama/**"
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "samauel05-byte",
+        "repo": "casamail"
+      }
     ]
   },
   "desktopName": "casamail.desktop",
