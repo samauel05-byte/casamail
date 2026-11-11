@@ -32,5 +32,7 @@ await pg.click("#mx"); await pg.click("#cfg"); await pg.click("#crearcuenta2"); 
 await pg.click("#mx"); await pg.click("#cfg"); await pg.click("#crearcuenta2"); await pg.click("#cwimap"); await pg.waitForSelector("#np"); ok(true, "'Otra cuenta (IMAP)' para correo de un dominio propio");
 const mp = await (await b.newContext({ viewport: { width: 390, height: 800 }, isMobile: true })).newPage(); mp.setDefaultTimeout(8000); await mp.goto("http://127.0.0.1:8081/?t=tok");
 ok(await mp.locator("#crearcuenta").isVisible().catch(() => false) || (await mp.waitForSelector("#crearcuenta", { state: "visible" }).then(() => true, () => false)), "en el móvil (y en la app Android) la bienvenida con 'Crear correo nuevo' también se ve");
+await pg.click("#mx"); await pg.click("#cfg"); await pg.click('[data-add="google"]'); await pg.waitForSelector("#gsimple"); await pg.click("#gsimple"); await pg.waitForSelector("#np");
+ok((await pg.inputValue("#np")) === "gmail" && (await pg.locator("#pn a").count()) === 1 && (await pg.locator("#pn a").getAttribute("href"))!.startsWith("https://myaccount.google.com/"), "Gmail ofrece la vía fácil: contraseña de aplicación (formulario con Gmail elegido y enlace para crearla)");
 ok(errs.length === 0, "sin errores de JavaScript " + errs.join(" | "));
 await b.close(); web.kill(); process.exit(process.exitCode ?? 0);
