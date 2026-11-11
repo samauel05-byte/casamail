@@ -1,11 +1,18 @@
 name: Instaladores
 # Genera los instaladores de CasaMail para Windows, macOS y Linux.
 #  - Al subir una etiqueta "v*" (p. ej. v0.2.0) los publica en una Release de GitHub.
-#  - Con "Run workflow" (manual) solo los genera como artefactos descargables.
+#  - Con "Run workflow" (manual) los genera como artefactos descargables; si marcas "publicar", además crea la Release
+#    "v<versión de package.json>" con los instaladores (enlaces de descarga permanentes).
+#  - Firma (opcional): si defines los secretos de docs/FIRMA-INSTALADORES.md, los instaladores salen firmados; si no, sin firmar.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publicar:
+        description: "Publicar una Release con los instaladores (v<versión>)"
+        type: boolean
+        default: false
 permissions:
   contents: write
 jobs:
@@ -28,7 +35,13 @@ jobs:
       - run: npm run build
       - run: npx electron-builder --publish never
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: "false"   # sin certificado de firma (instaladores sin firmar)
+          # Firma de código (solo si hay certificado): Windows (.pfx en base64) y macOS (.p12 en base64) + notarización de Apple
+          CSC_LINK: ${{ (matrix.name == 'windows' && secrets.WIN_CSC_LINK) || (matrix.name == 'macos' && secrets.MAC_CSC_LINK) || '' }}
+          CSC_KEY_PASSWORD: ${{ (matrix.name == 'windows' && secrets.WIN_CSC_KEY_PASSWORD) || (matrix.name == 'macos' && secrets.MAC_CSC_KEY_PASSWORD) || '' }}
+          APPLE_ID: ${{ matrix.name == 'macos' && secrets.APPLE_ID || '' }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ matrix.name == 'macos' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ matrix.name == 'macos' && secrets.APPLE_TEAM_ID || '' }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ (matrix.name == 'windows' && secrets.WIN_CSC_LINK != '') || (matrix.name == 'macos' && secrets.MAC_CSC_LINK != '') }}
       - uses: actions/upload-artifact@v4
         with:
           name: CasaMail-${{ matrix.name }}
@@ -40,15 +53,22 @@ jobs:
             release/*.AppImage
             release/*.deb
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.publicar
     needs: build
     runs-on: ubuntu-22.04
     steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        run: echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@v4
         with:
           path: dist-all
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || steps.ver.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: CasaMail ${{ steps.ver.outputs.tag }}
           files: dist-all/*
           generate_release_notes: true
+          make_latest: true

@@ -15,6 +15,7 @@ import * as outbox from "./outbox.js";
 import * as notify from "./notify.js";
 import * as idle from "./idle.js";
 import * as sigs from "./signature.js";
+import * as updates from "./updates.js";
 import * as cal from "./calendar.js";
 import * as oauth from "./oauth.js";
 import * as archive from "./archive.js";
@@ -470,6 +471,8 @@ app.post("/api/notifications/:id/agendar", h(async (r) => {
   return { event: e };
 }));
 app.post("/api/notifications/:id/descartar", h(async (r) => { notify.descartarAviso(Number(r.params.id)); return { ok: true }; }));
+/** ¿Hay una versión nueva de CasaMail? (consulta GitHub; sin enviar datos del usuario) */
+app.get("/api/update", h(async (r) => ({ info: await updates.check(r.query.force === "1"), version: updates.currentVersion() })));
 app.get("/api/notify/settings", h(async () => notify.getSettings()));
 app.put("/api/notify/settings", h(async (r) => notify.saveSettings(r.body as Partial<notify.NotifySettings>)));
 

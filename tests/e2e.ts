@@ -935,6 +935,37 @@ console.log("\nAvisos: correo nuevo con resumen, reuniones y recordatorios");
   seedC.logout().catch(() => {}); mail.closeConnections();
 }
 
+console.log("\nAviso de versión nueva");
+{
+  const up = await import("../src/updates.js"); const httpU = await import("node:http");
+  let reply: unknown = {}, code = 200, hits = 0; const sv = httpU.createServer((req, res) => { hits++; res.statusCode = code; res.setHeader("Content-Type", "application/json"); res.end(typeof reply === "string" ? reply : JSON.stringify(reply)); }); await new Promise<void>((r) => sv.listen(1215, "127.0.0.1", r));
+  process.env.CASAMAIL_UPDATE_URL = "http://127.0.0.1:1215/latest"; const cur = up.currentVersion();
+  await t("compara versiones como números (0.3.10 > 0.3.9, con o sin 'v', ignora -beta)", async () => {
+    eq([up.cmp("0.3.10", "0.3.9"), up.cmp("v1.0.0", "0.99.99"), up.cmp("0.3.2", "v0.3.2"), up.cmp("0.3.2-beta", "0.3.2"), up.cmp("0.3", "0.3.0"), up.cmp("0.2.9", "0.3.0")], [1, 1, 0, 0, 0, -1]);
+    ok(/^\d+\.\d+\.\d+/.test(cur), "lee su propia versión: " + cur);
+  });
+  await t("hay versión nueva → la detecta, con enlace y archivos de descarga", async () => {
+    reply = { tag_name: "v99.0.0", html_url: "https://github.com/x/y/releases/tag/v99.0.0", body: "Novedades", assets: [{ name: "CasaMail-Setup.exe", browser_download_url: "https://github.com/x/y/releases/download/v99.0.0/CasaMail-Setup.exe" }] };
+    up.resetUpdateCache(); const i = (await up.check(true))!; ok(i && i.newer && i.latest === "99.0.0" && i.current === cur && i.url.includes("v99.0.0") && i.assets[0].name === "CasaMail-Setup.exe", JSON.stringify(i));
+  });
+  await t("misma versión o más antigua → no avisa; borradores y pre-lanzamientos se ignoran", async () => {
+    reply = { tag_name: "v" + cur, html_url: "u" }; eq((await up.check(true))!.newer, false); reply = { tag_name: "v0.0.1", html_url: "u" }; eq((await up.check(true))!.newer, false);
+    reply = { tag_name: "v99.0.0", draft: true }; eq(await up.check(true), null); reply = { tag_name: "v99.0.0", prerelease: true }; eq(await up.check(true), null);
+  });
+  await t("la respuesta se guarda 6 h (no consulta GitHub en cada arranque) y 'buscar ahora' la fuerza", async () => {
+    reply = { tag_name: "v99.0.0", html_url: "u" }; up.resetUpdateCache(); hits = 0; await up.check(); await up.check(); await up.check(); eq(hits, 1, "solo una consulta"); await up.check(true); eq(hits, 2, "forzada");
+    hits = 0; await up.check(false, Date.now() + 7 * 3600_000); eq(hits, 1, "pasadas 6 h vuelve a consultar");
+  });
+  await t("sin internet, error del servidor o respuesta rara: no falla (devuelve nada) y no rompe la app", async () => {
+    code = 404; reply = { message: "Not Found" }; eq(await up.check(true), null); code = 200; reply = "esto no es json"; eq(await up.check(true), null); reply = {}; eq(await up.check(true), null);
+    sv.close(); sv.closeAllConnections?.(); eq(await up.check(true), null, "servidor caído");
+  });
+  await t("se puede desactivar (CASAMAIL_NO_UPDATE_CHECK=1): no hace ninguna petición", async () => {
+    const sv2 = httpU.createServer((_q, res) => { hits++; res.end("{}"); }); await new Promise<void>((r) => sv2.listen(1215, "127.0.0.1", r)); hits = 0; process.env.CASAMAIL_NO_UPDATE_CHECK = "1"; eq(await up.check(true), null); eq(hits, 0); delete process.env.CASAMAIL_NO_UPDATE_CHECK; sv2.close(); sv2.closeAllConnections?.();
+  });
+  delete process.env.CASAMAIL_UPDATE_URL;
+}
+
 console.log("\nTiempo real (IMAP IDLE): correo nuevo al instante");
 {
   const idle = await import("../src/idle.js"); const notify = await import("../src/notify.js"); const net = await import("node:net"); const { ImapFlow } = await import("imapflow");

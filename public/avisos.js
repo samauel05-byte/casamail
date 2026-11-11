@@ -174,11 +174,14 @@ async function tabAvisos(c) {
       <label class="lb">A las</label><select id="dh">${Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${s.digestHour === h ? 'selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('')}</select>
       <h4>Dónde te llegan</h4>
       <p class="lead mut" style="margin-top:0">${NATIVE ? 'En la app de escritorio: notificaciones del sistema, también con la ventana en segundo plano.' : window.casamailAndroid ? 'En el móvil: notificaciones de Android.' : 'En el navegador: avisos en pantalla y, si lo permites, notificaciones del navegador mientras CasaMail esté abierta.'}</p>
+      <h4>Versión</h4><div class="row"><span class="mut" id="vers">Buscando…</span><button class="btn btn-sm" id="vbusca">Buscar actualizaciones</button></div>
       <div class="row">${perm() && perm() !== 'granted' ? `<button class="btn" id="np">Permitir notificaciones del navegador</button>` : perm() === 'granted' ? '<span class="ok">✔ Notificaciones del navegador permitidas</span>' : ''}<button class="btn" id="nt">Enviarme un aviso de prueba</button></div>`;
     $$('[data-k]', c).forEach(i => (i.onchange = () => save({ [i.dataset.k]: i.checked })));
     $$('[data-r]', c).forEach(i => (i.onchange = () => save({ reminders: $$('[data-r]', c).filter(x => x.checked).map(x => Number(x.dataset.r)) })));
     $('#dh').onchange = e => save({ digestHour: Number(e.target.value) });
     const np = $('#np'); if (np) np.onclick = async () => { await Notification.requestPermission(); draw(); };
+    api('/api/update').then(r => { const v = $('#vers'); if (v) v.textContent = `CasaMail ${r.version}` + (r.info && r.info.newer ? ` · hay una versión nueva (${r.info.latest})` : ''); }).catch(() => {});
+    $('#vbusca').onclick = () => buscarActualizacion(true);
     $('#nt').onclick = async () => { try { await api('/api/notifications/test', {}); toast('Aviso de prueba enviado'); } catch (e) { fail(e); } };
   };
   const save = async p => { try { s = await api('/api/notify/settings', p, 'PUT'); } catch (e) { fail(e); } };
@@ -205,3 +208,19 @@ document.addEventListener('visibilitychange', () => { if (liveDirty && document.
     } catch { fails++; await sleep(Math.min(30000, 2000 * 2 ** Math.min(fails, 4))); }
   }
 })();
+
+/* ---------- versión nueva ---------- */
+async function buscarActualizacion(manual) {
+  try {
+    const r = await api('/api/update' + (manual ? '?force=1' : '')), i = r.info;
+    if (!i) { if (manual) toast('No se pudo comprobar ahora (¿sin internet?). Inténtalo más tarde.'); return r; }
+    if (!i.newer) { if (manual) toast(`Tienes la última versión (${r.version}).`); return r; }
+    let seen = ''; try { seen = localStorage.getItem('cm-upd') || ''; } catch { /* sin almacenamiento */ }
+    if (manual || seen !== i.latest) {
+      toast(`Hay una versión nueva de CasaMail: ${i.latest} (tienes la ${i.current}).`, { action: 'Descargar', ms: 20000, onAction: () => { window.open(i.url, '_blank', 'noopener'); } });
+      try { localStorage.setItem('cm-upd', i.latest); } catch { /* sin almacenamiento */ }
+    }
+    return r;
+  } catch { return null; }
+}
+if (!window.casamailAndroid && !/[?&#]demo/.test(location.href) && !/Android/.test(navigator.userAgent)) setTimeout(() => buscarActualizacion(false), 12000);
