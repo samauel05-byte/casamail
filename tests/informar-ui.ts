@@ -1,0 +1,23 @@
+// «Informar de un problema» en las respuestas de Yerleny. Uso: PW_PATH=... npx tsx tests/informar-ui.ts
+import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import { spawn } from "node:child_process";
+process.env.CASAMAIL_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "cm-uiinf-"));
+const { chromium } = await import(process.env.PW_PATH ?? "playwright");
+const web = spawn("node", ["--import", "tsx", "src/web.ts"], { env: { ...process.env, PORT: "8087", CASAMAIL_TOKEN: "tok", CASAMAIL_NO_OPEN: "1", CASAMAIL_NO_WARMUP: "1" }, stdio: "inherit" });
+process.on("exit", () => web.kill()); await new Promise((r) => setTimeout(r, 3500));
+const ok = (c: unknown, m: string) => { console.log(c ? "  ✔" : "  ✘", m); if (!c) process.exitCode = 1; };
+const b = await chromium.launch(); const pg = await (await b.newContext({ viewport: { width: 1200, height: 800 } })).newPage(); pg.setDefaultTimeout(12000);
+await pg.addInitScript(() => { (window as any).__abiertos = []; window.open = ((u: string) => { (window as any).__abiertos.push(u); return null; }) as any; });
+const errs: string[] = []; pg.on("pageerror", (e) => errs.push(e.message));
+await pg.goto("http://127.0.0.1:8087/?t=tok#demo"); await pg.waitForSelector(".m"); await pg.waitForTimeout(500);
+const opened = () => pg.evaluate(() => (window as any).__abiertos as string[]);
+await pg.locator(".m", { hasText: "Propuesta de diseño" }).first().click(); await pg.waitForSelector(".vsub");
+await pg.click("#ais"); await pg.waitForSelector(".card-ai pre"); await pg.waitForSelector(".card-ai .rep"); ok(true, "el resumen de Yerleny trae el enlace «Informar de un problema»");
+await pg.click(".card-ai .rep"); await pg.waitForTimeout(300);
+let u = (await opened())[0]; ok(u && u.startsWith("mailto:info@casalabs.com.do?"), "abre un correo dirigido al soporte: " + (u ?? "").slice(0, 60));
+const q = new URL(u); const body = q.searchParams.get("body") ?? ""; ok(/Resumen/.test(body) && /Respuesta de Yerleny señalada/.test(body) && !/Informar de un problema/.test(body), "el correo lleva la respuesta señalada (sin el texto del botón) y un espacio para describir el problema");
+ok((q.searchParams.get("subject") ?? "").includes("Yerleny") && /Revisa este mensaje antes de enviarlo/.test(body), "avisa de revisarlo antes de enviar (no se envía nada solo)");
+await pg.click("#air"); await pg.waitForSelector(".card-ai >> nth=1", { timeout: 8000 }).catch(() => {}); await pg.waitForTimeout(1500); ok(await pg.locator(".card-ai .rep").count() >= 2 || await pg.locator("#aiout .rep").count() >= 1, "las respuestas sugeridas también se pueden señalar");
+await pg.click("#asst"); await pg.fill("#ci", "hola"); await pg.click("#cgo"); await pg.waitForSelector(".bub.bot:not(.typing-w) .rep", { timeout: 10000 }); ok(true, "las respuestas del chat con Yerleny también");
+await pg.click("#dclose"); await pg.click("#new"); await pg.click("#aitog"); await pg.waitForSelector("#repdraft"); ok(true, "el cuadro «Redactar con Yerleny» tiene su enlace para informar");
+ok(errs.length === 0, "sin errores de JavaScript " + errs.join(" | "));
+await b.close(); web.kill(); process.exit(process.exitCode ?? 0);

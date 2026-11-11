@@ -10,6 +10,7 @@
 - **Conexiones**: la app de Android solo se conecta a la dirección HTTPS que tú indiques. CasaMail se conecta a tus proveedores de correo (IMAP/SMTP, Gmail, Outlook) y, si lo activas, a los motores de IA que elijas.
 - **IA (Yerleny)**: si usas un motor de IA en la nube, el texto de los mensajes que le pides resumir o redactar se envía a ese proveedor, con sus propias condiciones. Con un modelo local, nada sale de tu equipo.
 - **Avisos y calendario**: el historial de avisos y tus reuniones se guardan solo en tu equipo o servidor. Si activas el resumen de avisos con un motor de IA en la nube, el texto de los correos nuevos se envía a ese proveedor; puedes desactivarlo en Ajustes → Avisos. En Android, la app guarda además las alarmas de recordatorio en el teléfono.
+- **Informar de un problema con la IA**: el botón «Informar de un problema» de las respuestas de Yerleny abre un correo ya preparado hacia el soporte (info@casalabs.com.do) con la respuesta señalada. Lo envías tú, y puedes revisarlo y borrar lo que quieras antes; CasaMail no envía nada por su cuenta.
 - **Registro de errores** (escritorio): se guarda en tu equipo, sin contraseñas, claves ni direcciones de correo.
 
 ## Lo que no hacemos
