@@ -343,7 +343,7 @@ details.adv{border:1px solid var(--line);border-radius:12px;padding:10px 14px;ba
 .nact{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:9px}
 .nempty{display:flex;flex-direction:column;align-items:center;text-align:center;gap:8px;color:var(--ink-3);padding:34px 24px}
 .nfoot{padding:8px 12px;border-top:1px solid var(--line-2);text-align:right}
-.calday{font-weight:700;text-transform:capitalize;margin:16px 0 6px;color:var(--ink-2);font-size:13px;letter-spacing:.02em}
+.calday{font-weight:700;margin:16px 0 6px;color:var(--ink-2);font-size:13px;letter-spacing:.02em}
 .calev{display:flex;gap:12px;align-items:center;padding:10px 12px;border:1px solid var(--line);border-radius:14px;margin-bottom:8px}
 .caltime{flex:none;width:58px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--brand)}.caltime small{display:block;font-weight:500;color:var(--ink-3)}
 .calev .mut{font-size:13px;display:flex;gap:4px;align-items:center}
@@ -405,3 +405,7 @@ main.welcome #view{display:flex}  /* en el móvil la vista está oculta hasta ab
 /* modo demostración */
 #demobar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:#0a3fbd;color:#fff;text-align:center;font-size:12.5px;padding:5px 10px;padding-bottom:calc(5px + env(safe-area-inset-bottom))}
 #demobar a{color:#fff;font-weight:700;margin-left:8px;text-decoration:underline}
+
+.calday::first-letter{text-transform:uppercase}
+/* móvil: el calendario y otros cuadros estrechos no se cortan por la derecha */
+@media(max-width:560px){#mbox.narrow{padding:16px}.narrow-in .row{flex-wrap:wrap}.calev{flex-wrap:wrap}.calev .grow{min-width:0;flex:1 1 140px}}
