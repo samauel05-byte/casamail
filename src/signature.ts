@@ -9,7 +9,7 @@ import type { Outgoing } from "./mail.js";
  * para las respuestas, e importar la que ya usas desde un correo que enviaste. Se guardan solo en este equipo.
  */
 export interface Signature { id: string; name: string; html: string; text: string }
-export interface SigSet { items: Signature[]; newDefault: string; replyDefault: string }
+export interface SigSet { items: Signature[]; newDefault: string; replyDefault: string; serverManaged?: boolean }
 const FILE = "signatures.json";
 
 // ---------- limpieza de HTML (la firma puede venir de un correo ajeno: solo pasa lo seguro) ----------
@@ -85,20 +85,23 @@ const all = () => store.readJson<Record<string, SigSet>>(FILE, {});
 /** Firmas de una cuenta. Si solo existe la firma de texto antigua (Ajustes → Firma), se ofrece como una más. */
 export function forAccount(accountId: string): SigSet {
   const s = all()[accountId];
-  if (s?.items?.length) return { items: s.items, newDefault: s.items.some((x) => x.id === s.newDefault) ? s.newDefault : s.items[0].id, replyDefault: s.items.some((x) => x.id === s.replyDefault) ? s.replyDefault : (s.items.some((x) => x.id === s.newDefault) ? s.newDefault : s.items[0].id) };
+  if (s?.items?.length) return { items: s.items, newDefault: s.items.some((x) => x.id === s.newDefault) ? s.newDefault : s.items[0].id, replyDefault: s.items.some((x) => x.id === s.replyDefault) ? s.replyDefault : (s.items.some((x) => x.id === s.newDefault) ? s.newDefault : s.items[0].id), serverManaged: !!s.serverManaged };
+  if (s?.serverManaged) return { items: [], newDefault: "", replyDefault: "", serverManaged: true };
   const legacy = store.getSettings().signatures[accountId]?.trim();
   if (legacy) { const html = `<div>${legacy.split("\n").map(escHtml).join("<br>")}</div>`; return { items: [{ id: "texto", name: "Texto", html, text: legacy }], newDefault: "texto", replyDefault: "texto" }; }
   return { items: [], newDefault: "", replyDefault: "" };
 }
 export function save(accountId: string, set: Partial<SigSet>): SigSet {
   const items = (set.items ?? []).slice(0, 10).map((x) => clean(x)), ids = new Set(items.map((x) => x.id));
-  const out: SigSet = { items, newDefault: ids.has(set.newDefault ?? "") ? set.newDefault! : (items[0]?.id ?? ""), replyDefault: ids.has(set.replyDefault ?? "") ? set.replyDefault! : (items[0]?.id ?? "") };
+  const out: SigSet = { items, newDefault: ids.has(set.newDefault ?? "") ? set.newDefault! : (items[0]?.id ?? ""), replyDefault: ids.has(set.replyDefault ?? "") ? set.replyDefault! : (items[0]?.id ?? ""), serverManaged: !!set.serverManaged };
   const a = all(); a[accountId] = out; store.writeJson(FILE, a); return out;
 }
 /** Qué firma se usa: `choice` = id elegido en el redactor; "" = ninguna; undefined = la predeterminada (mensaje nuevo o respuesta). */
 export function pick(accountId: string, choice: string | undefined, reply: boolean): Signature | null {
   if (choice === "") return null;
-  const s = forAccount(accountId); const id = choice ?? (reply ? s.replyDefault : s.newDefault);
+  const s = forAccount(accountId);
+  if (s.serverManaged) return null; // la firma la añade el servidor de correo: CasaMail no añade ninguna (para no duplicar)
+  const id = choice ?? (reply ? s.replyDefault : s.newDefault);
   return s.items.find((x) => x.id === id) ?? null;
 }
 
