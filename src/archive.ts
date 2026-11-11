@@ -114,7 +114,7 @@ export function listMessages(folder: string, o: { limit?: number; offset?: numbe
 }
 
 /** Búsqueda en TODO el archivo (o en una carpeta si se indica). El texto usa el índice de texto completo. */
-export function searchMessages(q: SearchQuery, folder: string | null = null, limit = 50) {
+export function searchMessages(q: SearchQuery, folder: string | null = null, limit = 50, offset = 0) {
   const d = open(), w: string[] = [], a: (string | number)[] = [];
   if (folder && folder !== "*") { w.push("folder = ?"); a.push(folder); }
   const toks = (q.text ?? "").match(/[\p{L}\p{N}]+/gu);
@@ -128,7 +128,7 @@ export function searchMessages(q: SearchQuery, folder: string | null = null, lim
   if (q.starred) w.push("flags&2=2");
   const cond = w.length ? `WHERE ${w.join(" AND ")}` : "";
   const total = (d.prepare(`SELECT COUNT(*) n FROM msgs ${cond}`).get(...a) as { n: number }).n;
-  const rows = d.prepare(`SELECT ${COLS} FROM msgs ${cond} ORDER BY date DESC, id DESC LIMIT ?`).all(...a, Math.min(limit, 200)) as unknown as Row[];
+  const rows = d.prepare(`SELECT ${COLS} FROM msgs ${cond} ORDER BY date DESC, id DESC LIMIT ? OFFSET ?`).all(...a, Math.min(limit, 200), Math.max(0, offset)) as unknown as Row[];
   return { total, messages: rows.map(toSummary) };
 }
 

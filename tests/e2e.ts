@@ -651,6 +651,39 @@ await t("registro: si no se puede escribir (disco/permisos), NUNCA rompe la app"
   finally { process.env.CASAMAIL_HOME = prev; delete reqCjs.cache[reqCjs.resolve("../electron/log.cjs")]; }
 });
 
+console.log("\nListas sin límite de correos (páginas)");
+{
+  const { ImapFlow } = await import("imapflow");
+  store.addAccount(store.buildAccount({ id: "paginas", email: "yo@casa.test", pass: "secreto", user: "yo", imap: { host: "127.0.0.1", port: 1143, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } }));
+  const accG = store.getAccount("paginas"); await mail.createFolder(accG, "Grande");
+  const c = new ImapFlow({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await c.connect();
+  for (let i = 1; i <= 450; i++) await c.append("Grande", Buffer.from(`From: P <p@x.com>\r\nTo: yo@casa.test\r\nSubject: Grande ${i}\r\nDate: ${new Date(Date.UTC(2026, 0, 1) + i * 60_000).toUTCString()}\r\nMessage-ID: <g${i}@x>\r\n\r\ncuerpo ${i}`), i % 2 ? [] : ["\\Seen"]);
+  await c.logout(); mail.dropConnection("paginas");
+  await t("450 correos en una carpeta: se recorren TODOS por páginas, sin repetir ni saltarse ninguno (páginas de 200 y de 50)", async () => {
+    for (const size of [200, 50, 37]) {
+      const got: number[] = []; let off = 0, total = 0;
+      for (;;) { const r = await mail.listMessages(accG, "Grande", { limit: size, offset: off }); total = r.total; if (!r.messages.length) break; got.push(...r.messages.map((m) => Number(m.subject.replace(/\D/g, "")))); off += r.messages.length; if (off >= total) break; }
+      eq(total, 450); eq(got.length, 450, `tamaño ${size}`); eq(new Set(got).size, 450, `sin repetidos (tamaño ${size})`); eq(Math.min(...got), 1); eq(Math.max(...got), 450);
+    }
+    const first = await mail.listMessages(accG, "Grande", { limit: 5 }); eq(first.messages.map((m) => m.subject), ["Grande 450", "Grande 449", "Grande 448", "Grande 447", "Grande 446"], "la primera página es lo más nuevo");
+    eq((await mail.listMessages(accG, "Grande", { limit: 10, offset: 445 })).messages.length, 5, "la última página trae el resto"); eq((await mail.listMessages(accG, "Grande", { limit: 10, offset: 450 })).messages.length, 0, "pasado el final: vacío");
+  });
+  await t("solo no leídos y búsqueda también paginan hasta el final", async () => {
+    const un: number[] = []; for (let off = 0; ; off += 100) { const r = await mail.listMessages(accG, "Grande", { limit: 100, offset: off, unread: true }); if (!r.messages.length) break; un.push(...r.messages.map((m) => Number(m.subject.replace(/\D/g, "")))); }
+    eq(un.length, 225); ok(un.every((n) => n % 2 === 1), "solo los impares (no leídos)"); eq(new Set(un).size, 225);
+    const s1 = await mail.searchMessages(accG, { text: "cuerpo" }, "Grande", 200, 0), s2 = await mail.searchMessages(accG, { text: "cuerpo" }, "Grande", 200, 200), s3 = await mail.searchMessages(accG, { text: "cuerpo" }, "Grande", 200, 400);
+    eq([s1.total, s1.messages.length, s2.messages.length, s3.messages.length], [450, 200, 200, 50], "búsqueda por páginas de 200"); eq(new Set([...s1.messages, ...s2.messages, ...s3.messages].map((m) => m.uid)).size, 450);
+  });
+  await t("el archivo local (sin límite de capacidad) también se recorre por páginas", async () => {
+    const eml = (i: number) => Buffer.from(`From: A <a@x.com>\r\nTo: yo@casa.test\r\nSubject: Local ${i}\r\nDate: ${new Date(Date.UTC(2026, 0, 1) + i * 60_000).toUTCString()}\r\nMessage-ID: <l${i}@x>\r\n\r\nlocal ${i}`);
+    for (let i = 1; i <= 260; i++) await archive.addMessage("Carpeta-paginas", eml(i));
+    const got: string[] = []; for (let off = 0; ; off += 200) { const r = archive.listMessages("Carpeta-paginas", { limit: 200, offset: off }); if (!r.messages.length) break; got.push(...r.messages.map((m) => m.subject)); }
+    eq(got.length, 260); eq(new Set(got).size, 260); eq(archive.listMessages("Carpeta-paginas", { limit: 10 }).messages[0].subject, "Local 260");
+    const a1 = archive.searchMessages({ text: "local" }, "Carpeta-paginas", 200, 0), a2 = archive.searchMessages({ text: "local" }, "Carpeta-paginas", 200, 200); eq([a1.total, a1.messages.length, a2.messages.length], [260, 200, 60]);
+  });
+  store.removeAccount("paginas"); mail.closeConnections();
+}
+
 console.log("\nFirmas con imagen (HTML) como en Outlook");
 {
   const sg = await import("../src/signature.js");

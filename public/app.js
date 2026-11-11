@@ -195,33 +195,77 @@ function listHead(count) {
     <div class="list-tools"><div class="seg" role="group" aria-label="Filtro"><button data-f="" class="${!S.filter ? 'on' : ''}">Todos</button><button data-f="unread" class="${S.filter === 'unread' ? 'on' : ''}">No leídos</button><button data-f="starred" class="${S.filter === 'starred' ? 'on' : ''}">Destacados</button></div>
     <span class="grow"></span><button class="iconbtn sm ${S.thread ? 'on' : ''}" id="ft" aria-label="Agrupar por hilos" title="${S.thread ? 'Hilos agrupados' : 'Hilos sin agrupar'}">${I('layers')}</button></div></div>`;
 }
+/* ---------- lista de mensajes: páginas sin límite (se cargan más al llegar al final) ---------- */
+const PAGE = 50;
+const mkey = m => (m.account || '') + '|' + m.uid;
+function listReq(offset) {
+  if (S.aiq) return api(`/api/ai/search?${qs(S.acct === '*' ? firstAcct() : S.acct)}`, { query: S.aiq }); // la búsqueda por IA no se pagina
+  if (S.acct === '*') return api(`/api/unified?limit=${offset + PAGE}&offset=0`); // unificada: se pide TODO lo cargado + una página y se reemplaza (mezcla por fecha siempre coherente)
+  if (S.acct === LOCAL && !S.folder) return Promise.resolve({ messages: [] });
+  if (S.filter === 'starred') return api(`/api/search?${qs(S.acct)}&starred=1&limit=${PAGE}&offset=${offset}`);
+  return api(`/api/messages?${qs(S.acct)}${S.filter === 'unread' ? '&unread=1' : ''}&limit=${PAGE}&offset=${offset}`);
+}
+/** Etiqueta con la cuenta y aplica los filtros que en la bandeja unificada se hacen aquí. */
+function prep(r) {
+  let ms = r.messages.map(m => (S.acct !== '*' ? { ...m, account: S.acct } : m));
+  if (S.acct === '*') { if (S.filter === 'unread') ms = ms.filter(m => m.unread); if (S.filter === 'starred') ms = ms.filter(m => m.starred); }
+  return ms;
+}
+function setPaging(r, consumed) {
+  S.total = typeof r.total === 'number' ? r.total : null; S.next = typeof r.next === 'number' ? r.next : consumed;
+  S.more = !S.aiq && S.total != null && S.next < S.total && r.messages.length > 0;
+}
 async function list() {
   const id = ++S.req;
   $('#list').innerHTML = listHead() + skeleton(7);
   bindListHead();
   try {
-    let r;
-    if (S.aiq) r = await api(`/api/ai/search?${qs(S.acct === '*' ? firstAcct() : S.acct)}`, { query: S.aiq });
-    else if (S.acct === '*') r = await api('/api/unified');
-    else if (S.acct === LOCAL && !S.folder) r = { messages: [] };
-    else if (S.filter === 'starred') r = await api(`/api/search?${qs(S.acct)}&starred=1`);
-    else r = await api(`/api/messages?${qs(S.acct)}${S.filter === 'unread' ? '&unread=1' : ''}`);
+    const r = await listReq(0);
     if (id !== S.req) return;
-    S.msgs = r.messages.map(m => (S.acct !== '*' ? { ...m, account: S.acct } : m)); S.aiParsed = r.query; S.tri = false; S.triage = {};
-    if (S.acct === '*') { if (S.filter === 'unread') S.msgs = S.msgs.filter(m => m.unread); if (S.filter === 'starred') S.msgs = S.msgs.filter(m => m.starred); }
+    S.msgs = prep(r); S.aiParsed = r.query; S.tri = false; S.triage = {}; setPaging(r, r.messages.length);
     drawList();
   } catch (e) {
     if (id !== S.req) return;
-    $('#list').innerHTML = listHead() + `<div class="empty"><div class="big" style="background:var(--bad-soft);color:var(--bad)">${I('spam', 'lg')}</div><h3>No se pudo cargar</h3><p>${esc(e.message)}</p>${e.code === 'reauth' ? `<button class="btn btn-primary" id="recon">Reconectar cuenta</button>` : `<button class="btn" id="retry">Reintentar</button>`}</div>`;
+    $('#list').innerHTML = listHead() + `<div class="empty"><div class="big" style="background:var(--bad-soft);color:var(--bad)">${I('spam', 'lg')}</div><h3>No se pudo cargar</h3><p>${esc(e.message)}</p>${e.code === 'reauth' ? `<button class="btn btn-primary" id="recon">Reconectar la cuenta</button>` : `<button class="btn" id="retry">Reintentar</button>`}</div>`;
     bindListHead(); const rb = $('#recon'); if (rb) rb.onclick = () => settings('cuentas'); const rt = $('#retry'); if (rt) rt.onclick = list;
   }
+}
+/** Carga la página siguiente y la añade sin mover lo que estás leyendo. */
+async function loadMore() {
+  if (S.loadingMore || !S.more) return;
+  const id = S.req; S.loadingMore = true; const lst = $('#list'), st = lst.scrollTop; const b = $('#lmore'); if (b) { b.disabled = true; b.textContent = 'Cargando…'; }
+  try {
+    const r = await listReq(S.next); if (id !== S.req) return;
+    if (S.acct === '*') { S.msgs = prep(r); setPaging(r, r.next); } else { const seen = new Set(S.msgs.map(mkey)); S.msgs = S.msgs.concat(prep(r).filter(m => !seen.has(mkey(m)))); setPaging(r, S.next + r.messages.length); }
+    drawList(); $('#list').scrollTop = st;
+  } catch (e) { fail(e); drawList(); $('#list').scrollTop = st; }
+  finally { S.loadingMore = false; }
+  // en la bandeja unificada con filtro puede que la página no traiga nada visible: se sigue hasta llenar la pantalla
+  const l2 = $('#list'); if (S.more && !S.loadingMore && l2 && l2.scrollHeight <= l2.clientHeight + 120) loadMore();
+}
+$('#list').addEventListener('scroll', () => { const l = $('#list'); if (S.more && l.scrollHeight - l.scrollTop - l.clientHeight < 700) loadMore(); }, { passive: true });
+/** Actualiza la lista (correo nuevo, cambios en otro dispositivo) sin perder lo que ya cargaste ni tu posición. */
+async function refreshList() {
+  if (S.aiq || S.loadingMore || S.msgs.length <= PAGE) return list(); // poco cargado: se recarga entera
+  const lst = $('#list'), rows = $$('.m'), top = lst.getBoundingClientRect().top;
+  const anchor = rows.find(e => e.getBoundingClientRect().bottom > top + 4); const ak = anchor && ((anchor.dataset.a || '') + '|' + anchor.dataset.u), ay = anchor ? anchor.getBoundingClientRect().top - top : 0;
+  let r; try { r = await listReq(0); } catch { return; }
+  const first = prep(r), fk = new Set(first.map(mkey)), minUid = {}; for (const m of first) minUid[m.account || ''] = Math.min(minUid[m.account || ''] ?? Infinity, m.uid);
+  const oldKeys = new Set(S.msgs.map(mkey)), rest = [], gone = [];
+  for (const m of S.msgs) { if (fk.has(mkey(m))) continue; (m.uid < (minUid[m.account || ''] ?? Infinity) ? rest : gone).push(m); } // lo que debería estar arriba y ya no está, se quitó o cambió de estado
+  const added = first.filter(m => !oldKeys.has(mkey(m))).length, removed = gone.length;
+  S.msgs = first.concat(rest); if (S.acct === '*') S.msgs.sort((x, y) => (y.date ?? '').localeCompare(x.date ?? '') || (x.account || '').localeCompare(y.account || '') || y.uid - x.uid);
+  S.next = Math.max(first.length, S.next + added - removed); S.total = typeof r.total === 'number' ? r.total : S.total; S.more = S.total != null && S.next < S.total;
+  drawList();
+  const el = ak && $$('.m').find(e => ((e.dataset.a || '') + '|' + e.dataset.u) === ak); lst.scrollTop = el ? lst.scrollTop + (el.getBoundingClientRect().top - lst.getBoundingClientRect().top - ay) : lst.scrollTop;
+  if (S.cur) $$('.m').forEach(e => e.classList.toggle('on', e.dataset.u == S.cur.uid));
 }
 const isCur = m => !!S.cur && S.cur.uid === m.uid && (m.account || '') === (S.macct || m.account || '');
 const norm = s => (s || '').replace(/^((re|rv|fwd?|fw|reenv)\s*:\s*)+/i, '').trim().toLowerCase();
 function drawList() {
   const groups = [], seen = {};
   for (const m of S.msgs) { const k = S.thread ? norm(m.subject) + '|' + (m.account || '') : m.uid + '|' + (m.account || ''); if (seen[k] !== undefined) { groups[seen[k]].n++; continue; } seen[k] = groups.length; groups.push({ m, n: 1 }); }
-  let html = listHead(groups.length || '');
+  const cnt = S.total != null && !(S.acct === '*' && S.filter) && !S.aiq ? S.total : groups.length; let html = listHead(cnt ? cnt.toLocaleString('es') : '');
   if (S.aiq) html += `<div class="ai-note">${I('sparkles', 'sm')} Interpreté tu búsqueda: ${Object.entries(S.aiParsed || {}).filter(([, v]) => v).map(([k, v]) => `<span class="chip">${esc(k)}: ${esc(v)}</span>`).join('') || '<span class="mut">(sin filtros)</span>'}<button class="btn btn-ghost btn-sm" id="clr">Limpiar</button></div>`;
   let last = '';
   html += groups.map(({ m, n }) => {
@@ -235,7 +279,9 @@ function drawList() {
       <div class="m-act"><button class="iconbtn sm" data-qa="star" title="Destacar" aria-label="Destacar">${I('star', 'sm')}</button>${S.acct === LOCAL ? '' : `<button class="iconbtn sm" data-qa="archive" title="Archivar" aria-label="Archivar">${I('archive', 'sm')}</button>`}<button class="iconbtn sm" data-qa="trash" title="Papelera" aria-label="Papelera">${I('trash', 'sm')}</button></div></div>`;
   }).join('');
   if (!groups.length) html += `<div class="empty"><div class="big">${I(S.filter === 'starred' ? 'star' : 'check', 'lg')}</div><h3>${S.aiq ? 'Sin resultados' : S.filter ? 'Nada por aquí' : S.acct === LOCAL ? 'Tu archivo local está vacío' : 'Bandeja vacía'}</h3><p>${S.aiq ? 'Prueba con otras palabras.' : S.filter ? 'No hay mensajes con este filtro.' : S.acct === LOCAL ? 'Importa un PST de Outlook o un MBOX, o lleva aquí el correo viejo de tus cuentas.' : 'Estás al día. Disfruta el silencio.'}</p>${S.acct === LOCAL && !S.filter && !S.aiq ? '<button class="btn btn-primary" data-import="1">Importar un PST o MBOX</button>' : ''}</div>`;
-  $('#list').innerHTML = html; bindListHead();
+  if (groups.length && !S.aiq) html += S.more ? `<div class="loadmore"><button class="btn" id="lmore">Cargar más · ${S.msgs.length.toLocaleString('es')} de ${S.total.toLocaleString('es')}</button></div>` : (S.total != null && !(S.acct === '*' && S.filter) ? `<div class="loadmore end">Fin de la lista · ${S.total.toLocaleString('es')} ${S.total === 1 ? 'correo' : 'correos'}</div>` : '');
+  $('#list').innerHTML = html; bindListHead(); const lm = $('#lmore'); if (lm) lm.onclick = loadMore;
+  { const l = $('#list'); if (S.more && !S.loadingMore && l.scrollHeight <= l.clientHeight + 120) setTimeout(loadMore, 0); } // pantalla alta: se llena sola
   const c = $('#clr'); if (c) c.onclick = () => { S.aiq = null; $('#q').value = ''; list(); };
 }
 function bindListHead() {
@@ -758,10 +804,10 @@ document.addEventListener('keydown', e => {
   const t = e.target.tagName; if (['INPUT', 'TEXTAREA', 'SELECT'].includes(t) || e.metaKey || e.ctrlKey || e.altKey || !$('#modal').hidden || !$('#palette').hidden) return;
   const rows = $$('.m'), i = rows.findIndex(r => r.classList.contains('on'));
   if (e.key === 'c') { e.preventDefault(); compose(); } else if (e.key === '/') { e.preventDefault(); $('#q').focus(); }
-  else if (e.key === 'j' && rows[i + 1]) rows[i + 1].click(); else if (e.key === 'k' && rows[i - 1]) rows[i - 1].click();
+  else if (e.key === 'j' && rows[i + 1]) rows[i + 1].click(); else if (e.key === 'j' && i >= 0 && S.more) loadMore().then(() => $$('.m')[i + 1]?.click()); else if (e.key === 'k' && rows[i - 1]) rows[i - 1].click();
   else if (S.cur && e.key === 'r') compose({ reply: { all: false } }); else if (S.cur && e.key === 'e') act('archive', {}, 'Archivado', 1); else if (S.cur && e.key === '#') act('trash', {}, 'Movido a la papelera', 1); else if (S.cur && e.key === 's') toggleStar();
   else if (e.key === '?') toast('C redactar · / buscar · J/K moverse · R responder · E archivar · # papelera · S destacar · Ctrl+K comandos', { ms: 7000 });
 });
-setInterval(() => { if (document.visibilityState === 'visible' && S.acct && !S.aiq && $('#compose').hidden && $('#modal').hidden) { const sel = S.cur ? S.cur.uid : null; list().then(() => { if (sel) $$('.m').forEach(e => e.classList.toggle('on', e.dataset.u == sel)); }); folders(true); } }, 120000);
+setInterval(() => { if (document.visibilityState === 'visible' && S.acct && !S.aiq && $('#compose').hidden && $('#modal').hidden) { const sel = S.cur ? S.cur.uid : null; refreshList().then(() => { if (sel) $$('.m').forEach(e => e.classList.toggle('on', e.dataset.u == sel)); }); folders(true); } }, 120000);
 setInterval(outboxCount, 30000);
 init().catch(e => { $('#list').innerHTML = `<div class="empty"><h3>Error</h3><p>${esc(e.message)}</p></div>`; });

@@ -397,3 +397,6 @@ main.welcome #view{display:flex}  /* en el móvil la vista está oculta hasta ab
 /* cabecera estrecha: con la campana ya no cabía todo y el botón IA se montaba sobre ella */
 @media(max-width:820px){.search{overflow:hidden}.aitoggle{flex:none}.search input{min-width:0}}
 @media(max-width:480px){#theme{display:none}}
+
+/* lista sin límite: pie con "Cargar más" */
+.loadmore{padding:16px;text-align:center}.loadmore.end{color:var(--ink-3);font-size:13px}
