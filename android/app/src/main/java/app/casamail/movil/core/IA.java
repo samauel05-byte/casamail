@@ -22,7 +22,7 @@ public final class IA {
     public static final class ErrorIA extends Exception { public ErrorIA(String m) { super(m); } }
 
     private static final String HOST = "https://generativelanguage.googleapis.com/v1beta/models/";
-    private static final String MODELO_DEF = "gemini-flash-latest";   // alias que Google mantiene apuntando al último modelo Flash (gratuito); evita que se rompa al retirar versiones
+    private static final String MODELO_DEF = "gemini-flash-lite-latest";   // Flash-Lite: el modelo más rápido y de menor costo; alias que Google mantiene al día. Rápido = no se queda "comprobando".
     private final Almacen alm;
 
     public IA(Almacen alm) { this.alm = alm; }
@@ -48,7 +48,7 @@ public final class IA {
             body.put("contents", new JSONArray().put(new JSONObject().put("role", "user").put("parts", new JSONArray().put(new JSONObject().put("text", usuario)))));
             body.put("generationConfig", new JSONObject().put("temperature", temp).put("maxOutputTokens", maxTokens));
             c = (HttpURLConnection) new URL(HOST + modelo() + ":generateContent?key=" + URLEncoder.encode(k, "UTF-8")).openConnection();
-            c.setConnectTimeout(15000); c.setReadTimeout(45000); c.setRequestMethod("POST"); c.setDoOutput(true);
+            c.setConnectTimeout(15000); c.setReadTimeout(60000); c.setRequestMethod("POST"); c.setDoOutput(true);
             c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             try (OutputStream o = c.getOutputStream()) { o.write(body.toString().getBytes("UTF-8")); }
             int code = c.getResponseCode();
@@ -67,7 +67,8 @@ public final class IA {
             if (out.isEmpty()) throw new ErrorIA("La IA devolvió una respuesta vacía. Prueba otra vez.");
             return out;
         } catch (ErrorIA e) { throw e; }
-        catch (UnknownHostException | SocketTimeoutException e) { throw new ErrorIA("Sin conexión para usar Yerleny. Revisa tu internet e inténtalo de nuevo."); }
+        catch (SocketTimeoutException e) { throw new ErrorIA("Yerleny tardó demasiado en responder. Prueba otra vez (si tu conexión va lenta puede tardar)."); }
+        catch (UnknownHostException e) { throw new ErrorIA("Sin conexión para usar Yerleny. Revisa tu internet e inténtalo de nuevo."); }
         catch (Exception e) { throw new ErrorIA("No se pudo usar Yerleny: " + e.getMessage()); }
         finally { if (c != null) c.disconnect(); }
     }
