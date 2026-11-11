@@ -100,7 +100,7 @@ public final class IA {
                 sobre(m), 0.2, 500);
     }
 
-    public JSONArray respuestas(JSONObject m) throws ErrorIA {
+    public JSONArray respuestas(JSONObject m) throws ErrorIA, JSONException {
         String raw = generar("Propón 3 respuestas distintas al correo: una breve y afirmativa, una que pida más información o negocie, una cortés que decline. Devuelve SOLO un array JSON con EXACTAMENTE 3 objetos así: [{\"label\":\"Confirmar\",\"body\":\"...\"},{\"label\":\"Pedir más info\",\"body\":\"...\"},{\"label\":\"Declinar\",\"body\":\"...\"}]. Texto plano, SIN firma ni nombre al final. Idioma: el del correo. " + SEG,
                 sobre(m), 0.7, 700);
         JSONArray arr = json(raw), out = new JSONArray();
@@ -109,7 +109,7 @@ public final class IA {
         return out;
     }
 
-    public JSONObject borrador(String instruccion, String tono, JSONObject original) throws ErrorIA {
+    public JSONObject borrador(String instruccion, String tono, JSONObject original) throws ErrorIA, JSONException {
         String sis = "Redactas correos electrónicos. Devuelve SOLO JSON: {\"subject\": string, \"body\": string}. Escribes EN NOMBRE DEL USUARIO, en primera persona; nunca menciones ni firmes como Yerleny ni hables de ti como IA. El cuerpo en texto plano, SIN firma ni nombre al final (se añade aparte) y sin \"Asunto:\" dentro del cuerpo. Tono: " + (tono == null || tono.isEmpty() ? "profesional y cercano" : tono) + ". "
                 + (original != null ? "Es una respuesta: deja subject vacío. Idioma: el del correo original." : "Es un correo NUEVO: subject es OBLIGATORIO (breve y concreto). Idioma: el de la instrucción.") + " No inventes datos (fechas, cifras, nombres) que no estén en la instrucción o el correo. " + SEG;
         String usr = (original != null ? sobre(original) + "\n\n" : "") + "Instrucción del usuario: " + instruccion;
@@ -134,7 +134,7 @@ public final class IA {
     }
 
     /** Chat sencillo del asistente: responde y, si el usuario pide escribir un correo, puede devolver un borrador. */
-    public JSONObject chat(JSONArray history, String texto) throws ErrorIA {
+    public JSONObject chat(JSONArray history, String texto) throws ErrorIA, JSONException {
         StringBuilder conv = new StringBuilder();
         if (history != null) for (int i = Math.max(0, history.length() - 12); i < history.length(); i++) {
             JSONObject m = history.optJSONObject(i); if (m == null) continue;
