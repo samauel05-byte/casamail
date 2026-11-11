@@ -199,5 +199,34 @@ if (!app.requestSingleInstanceLock()) {
     srv.onNotify(showNativeNotification); // avisos de correo nuevo, reuniones y recordatorios: notificaciones del sistema
     createTray();
     if (!process.argv.includes('--hidden')) createWindow();
+    iniciarActualizaciones();
   });
+}
+
+// ---------- actualización automática (electron-updater, desde las Releases de GitHub) ----------
+function iniciarActualizaciones() {
+  if (!app.isPackaged) return; // en desarrollo no se actualiza
+  let autoUpdater;
+  try { ({ autoUpdater } = require('electron-updater')); } catch (e) { log.warn('Sin electron-updater:', String(e)); return; }
+  autoUpdater.logger = { info: (m) => log.info('[update]', m), warn: (m) => log.warn('[update]', m), error: (m) => log.error('[update]', m), debug: () => {} };
+  autoUpdater.autoDownload = true;              // descarga la nueva versión sola, en segundo plano
+  autoUpdater.autoInstallOnAppQuit = true;      // y la instala al cerrar la app
+  let avisado = false;
+  autoUpdater.on('update-available', (info) => { log.info('[update] hay versión nueva', info && info.version); });
+  autoUpdater.on('update-downloaded', (info) => {
+    if (avisado) return; avisado = true;
+    const v = (info && info.version) || '';
+    log.info('[update] descargada', v);
+    if (Notification.isSupported()) {
+      const n = new Notification({ title: 'CasaMail ' + v + ' lista', body: 'Se instalará al cerrar. ¿Reiniciar ahora para actualizar?' });
+      n.on('click', () => { try { autoUpdater.quitAndInstall(); } catch (e) { log.error('[update] quitAndInstall', String(e)); } });
+      n.show();
+    }
+    if (win) { try { win.webContents.send('cm-update-ready', { version: v }); } catch { /* ventana cerrada */ } }
+  });
+  autoUpdater.on('error', (e) => log.warn('[update] error', String((e && e.message) || e)));
+  const comprobar = () => autoUpdater.checkForUpdates().catch((e) => log.warn('[update] checkForUpdates', String((e && e.message) || e)));
+  setTimeout(comprobar, 8000);                  // al arrancar (tras dar tiempo a que todo cargue)
+  setInterval(comprobar, 6 * 60 * 60 * 1000);   // y cada 6 horas
+  ipcMain.handle('cm-install-update', () => { try { autoUpdater.quitAndInstall(); } catch (e) { log.error('[update] quitAndInstall', String(e)); } });
 }
