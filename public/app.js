@@ -47,7 +47,7 @@ const ICONS = {
   home: '<path d="M8 15.5 16 9l8 6.5"/>',
 };
 /* Logo de CasaMail (vectorial; usa las variables de color del tema) */
-const LOGO = (w = 44) => `<svg viewBox="455 165 630 530" width="${w}" height="${Math.round(w * 0.84)}" aria-hidden="true" style="display:block"><path d="M540 418V618Q540 652 574 652H962Q996 652 996 618V418Z" fill="var(--logo-sky)"/><path d="M545 425 767 555 990 425 768 225Z" fill="var(--logo-paper)"/><g fill="none" stroke="var(--logo-navy)" stroke-linecap="round" stroke-linejoin="round"><path d="M545 425 767 555 990 425" stroke-width="34"/><path d="M540 418V618Q540 652 574 652H962Q996 652 996 618V418" stroke-width="34"/><path d="M566 632 698 532" stroke-width="16"/><path d="M495 422 768 207 1042 425" stroke-width="56"/></g><path d="M920 262V242Q920 228 934 228H998Q1012 228 1012 242V352Z" fill="var(--logo-navy)"/><g fill="var(--logo-navy)"><rect x="715" y="327" width="48" height="48" rx="9"/><rect x="777" y="327" width="48" height="48" rx="9"/><rect x="715" y="387" width="48" height="48" rx="9"/><rect x="777" y="387" width="48" height="48" rx="9"/></g></svg>`;
+const LOGO = (w = 44) => `<img class="logo-img" src="mark.png" width="${w}" height="${Math.round(w * 0.84)}" alt="" style="display:block;object-fit:contain">`; /* logo de CasaMail (imagen con fondo transparente) */
 const I = (n, c = '') => `<svg class="ic ${c}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 
 /* ---------- estado ---------- */
