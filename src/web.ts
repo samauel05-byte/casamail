@@ -336,7 +336,7 @@ app.post("/api/send", h(async (r) => {
 }));
 app.post("/api/message/:uid/reply", h(async (r) => {
   const a = acc(r);
-  return dispatch(a, await mail.buildReply(a, folder(r), uidOf(r), { text: r.body.text, replyAll: r.body.replyAll }, sigs.pick(a.id, r.body.signature, true)), { now: r.body.now });
+  return dispatch(a, await mail.buildReply(a, folder(r), uidOf(r), { text: r.body.text, replyAll: r.body.replyAll, attachments: r.body.attachments }, sigs.pick(a.id, r.body.signature, true)), { now: r.body.now });
 }));
 // ---------- firmas (con imagen) ----------
 app.get("/api/signatures", h(async () => Object.fromEntries(store.loadAccounts().map((a) => [a.id, sigs.forAccount(a.id)]))));
