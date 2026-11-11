@@ -66,4 +66,41 @@
     };
     $('#nle').focus();
   };
+
+  /* ----- Yerleny (IA) en el móvil: clave gratuita de Gemini ----- */
+  window.nativoIA = () => {
+    const configurada = S.aiOk;
+    openModal(`<div class="narrow-in"><div class="row" style="margin:0 0 4px"><h3 style="font-size:21px">${YL ? '' : ''}Yerleny · IA</h3><span class="grow"></span><button class="iconbtn" id="iax" aria-label="Cerrar">${I('x')}</button></div>
+      <p class="mut" style="margin:0 0 10px">Yerleny resume correos, sugiere respuestas y redacta por ti. Usa <b>Gemini de Google</b>, que tiene un <b>nivel gratuito</b>. Pega tu clave gratuita (se guarda cifrada solo en tu móvil; solo se envía a Google el texto que tú pidas procesar).</p>
+      <ol class="steps" style="margin:0 0 10px"><li><span>Abre <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">aistudio.google.com/apikey</a> e inicia sesión con tu cuenta de Google.</span></li><li><span>Pulsa <b>Crear clave de API</b> y cópiala.</span></li><li><span>Pégala aquí abajo.</span></li></ol>
+      <label class="lb">Clave de API de Gemini</label><input id="iak" class="field" type="password" placeholder="${configurada ? '•••• (ya configurada; pega una nueva para cambiarla)' : 'AIza…'}" autocomplete="off" spellcheck="false">
+      <div class="row" style="margin-top:14px"><button class="btn btn-primary" id="iasave">Guardar</button><button class="btn" id="iatest">Probar</button><span id="iast" class="mut"></span></div>
+      ${configurada ? `<p class="mut" style="font-size:12.5px;margin:12px 0 0">Yerleny ya está activada. <a href="#" id="iaoff">Desactivar y borrar la clave</a>.</p>` : ''}</div>`, true);
+    $('#iax').onclick = closeModal;
+    $('#iasave').onclick = async e => {
+      const k = $('#iak').value.trim(); if (!k) { $('#iast').innerHTML = '<span class="err">Pega la clave primero.</span>'; return; }
+      const b = e.currentTarget; busy(b, true); $('#iast').textContent = 'Comprobando…';
+      try { await api('/api/ai/test', {}); } catch { /* el test real va tras guardar */ }
+      try { await api('/api/ai/config', { apiKey: k }); const t = await api('/api/ai/test', {}); S.aiOk = true; $('#iast').innerHTML = `<span class="ok">Listo ✔ (${esc(t.reply)})</span>`; toast('Yerleny activada'); setTimeout(closeModal, 900); }
+      catch (x) { S.aiOk = false; $('#iast').innerHTML = `<span class="err">${esc(x.message)}</span>`; busy(b, false); }
+    };
+    $('#iatest').onclick = async e => {
+      const k = $('#iak').value.trim(); const b = e.currentTarget; busy(b, true); $('#iast').textContent = 'Probando…';
+      try { if (k) await api('/api/ai/config', { apiKey: k }); const t = await api('/api/ai/test', {}); S.aiOk = true; $('#iast').innerHTML = `<span class="ok">Funciona ✔ (${esc(t.reply)})</span>`; }
+      catch (x) { $('#iast').innerHTML = `<span class="err">${esc(x.message)}</span>`; }
+      busy(b, false);
+    };
+    const off = $('#iaoff'); if (off) off.onclick = async ev => { ev.preventDefault(); await api('/api/ai/config', { apiKey: '' }); S.aiOk = false; toast('Yerleny desactivada'); closeModal(); };
+    $('#iak').focus();
+  };
+
+  // En Ajustes, la pestaña "Yerleny" muestra la pantalla de la clave (no los "motores" del escritorio).
+  // Se aplica DESPUÉS de app.js (que define tabIA), porque nativo.js se carga antes para interceptar las llamadas.
+  const tabIANativo = async (c) => { c.innerHTML = `<h3>Yerleny · IA</h3><p class="lead">Resume correos, sugiere respuestas y redacta por ti, con el nivel gratuito de Gemini.</p>
+    <div class="row"><button class="btn btn-primary" id="iaopen">${S.aiOk ? 'Cambiar la clave de IA' : 'Activar Yerleny (clave gratis)'}</button>${S.aiOk ? `<span class="ok" style="align-self:center">Activada ✔</span>` : ''}</div>
+    <p class="mut" style="font-size:13px;margin-top:14px">La clave se guarda cifrada solo en tu móvil. Solo se envía a Google el texto que tú pidas resumir, responder o redactar; nada se manda a los creadores de la app.</p>`;
+    $('#iaopen').onclick = () => nativoIA();
+  };
+  const aplicar = () => { window.tabIA = tabIANativo; };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', aplicar); else aplicar();
 })();

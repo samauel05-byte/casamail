@@ -15,9 +15,11 @@ await pg.route("**/*", (route) => {
 // puente nativo simulado: sin cuentas hasta iniciar sesión
 await pg.addInitScript("window.__name = (f) => f;");   // esbuild (tsx) inserta __name en las funciones que se serializan
 await pg.addInitScript(() => {
-  const w = window as any; w.llamadas = []; let cuenta: string | null = null;
+  const w = window as any; w.llamadas = []; let cuenta: string | null = null; let iaKey = "";
   w.CasaNative = { llamar(id: number, m: string, u: string, body: string) {
     w.llamadas.push([m, u, body]); const r = (s: number, j: unknown) => setTimeout(() => w.__casaRes(id, s, JSON.stringify(j)), 5);
+    if (u.startsWith("/api/ai/config")) { if (m === "POST") iaKey = JSON.parse(body || "{}").apiKey || ""; return r(200, iaKey ? { provider: "gemini", model: "gemini-2.0-flash", ok: true } : null); }
+    if (u.startsWith("/api/ai/test")) return iaKey ? r(200, { reply: "ok" }) : r(500, { error: "Yerleny necesita una clave de IA gratuita. Ponla en Ajustes → Yerleny." });
     if (u.startsWith("/api/accounts") && m === "POST") { const d = JSON.parse(body); if (d.pass === "mala") return r(401, { error: "Contraseña incorrecta. Gmail pide una contraseña de aplicación.", code: "reauth" }); cuenta = d.email; return r(200, { ok: true }); }
     if (u.startsWith("/api/accounts")) return r(200, cuenta ? [{ id: "yo_gmail_com", email: cuenta, auth: "password" }] : []);
     if (u.startsWith("/api/detect")) return r(200, { conocido: true, id: "gmail", imapHost: "imap.gmail.com", imapPuerto: 993, smtpHost: "smtp.gmail.com", smtpPuerto: 465, nota: "Gmail necesita una contraseña de aplicación.", enlaceClaveApp: "https://myaccount.google.com/apppasswords" });
@@ -41,5 +43,10 @@ await pg.screenshot({ path: "/tmp/shots-n/n2-login.png" });
 await pg.fill("#nlw", "buena"); await pg.click("#nlgo"); await pg.waitForSelector(".m"); ok((await pg.locator(".m").count()) === 1, "iniciada la sesión, aparece la bandeja con el correo");
 const llamadas = await pg.evaluate(() => (window as any).llamadas as string[][]); ok(llamadas.some((l) => l[0] === "POST" && l[1] === "/api/accounts" && JSON.parse(l[2]).email === "yo@gmail.com"), "las llamadas /api van por el puente nativo");
 await pg.click("#cfg"); await pg.waitForSelector("#nlogin2"); ok(!(await pg.locator('[data-add="google"]').isVisible()), "en Cuentas no hay OAuth (solo inicio de sesión directo)");
+// Yerleny: pantalla de la clave de IA (Gemini)
+await pg.click('[data-tab="ia"]'); await pg.waitForSelector("#iaopen"); ok((await pg.locator("#iaopen").innerText()).includes("Activar"), "Ajustes → Yerleny ofrece activar la IA con una clave gratis");
+await pg.click("#iaopen"); await pg.waitForSelector("#iak"); ok((await pg.locator(".narrow-in").innerText()).includes("aistudio.google.com"), "la pantalla de IA enlaza a la clave gratuita de Gemini");
+await pg.fill("#iak", "AIzaTEST"); await pg.click("#iasave"); await pg.waitForSelector("#iast .ok"); ok((await pg.locator("#iast .ok").innerText()).includes("Listo"), "al guardar la clave, Yerleny queda activada");
+const ll = await pg.evaluate(() => (window as any).llamadas as string[][]); ok(ll.some((l) => l[0] === "POST" && l[1] === "/api/ai/config" && JSON.parse(l[2]).apiKey === "AIzaTEST"), "la clave se guarda por el puente (/api/ai/config)");
 ok(ext.length === 0 && errs.length === 0, `nada sale a internet y sin errores (${ext.join(",")}) ${errs.join(" | ")}`);
 await b.close(); process.exit(process.exitCode ?? 0);
