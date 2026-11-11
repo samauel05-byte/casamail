@@ -30,5 +30,7 @@ const link = pg.locator("#pn a"); ok((await link.count()) === 1 && (await link.g
 await pg.waitForTimeout(300); await pg.screenshot({ path: "/tmp/shots-n/c3-yahoo.png" });
 await pg.click("#mx"); await pg.click("#cfg"); await pg.click("#crearcuenta2"); await pg.locator(".nuevo-card", { hasText: "iCloud" }).click(); await pg.click("#cwdone"); await pg.waitForSelector("#np"); ok((await pg.inputValue("#np")) === "icloud", "iCloud → formulario con iCloud elegido");
 await pg.click("#mx"); await pg.click("#cfg"); await pg.click("#crearcuenta2"); await pg.click("#cwimap"); await pg.waitForSelector("#np"); ok(true, "'Otra cuenta (IMAP)' para correo de un dominio propio");
+const mp = await (await b.newContext({ viewport: { width: 390, height: 800 }, isMobile: true })).newPage(); mp.setDefaultTimeout(8000); await mp.goto("http://127.0.0.1:8081/?t=tok");
+ok(await mp.locator("#crearcuenta").isVisible().catch(() => false) || (await mp.waitForSelector("#crearcuenta", { state: "visible" }).then(() => true, () => false)), "en el móvil (y en la app Android) la bienvenida con 'Crear correo nuevo' también se ve");
 ok(errs.length === 0, "sin errores de JavaScript " + errs.join(" | "));
 await b.close(); web.kill(); process.exit(process.exitCode ?? 0);

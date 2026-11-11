@@ -388,3 +388,4 @@ details.adv{border:1px solid var(--line);border-radius:12px;padding:10px 14px;ba
 .nuevo-steps>li::before{content:counter(s);position:absolute;left:0;top:0;width:28px;height:28px;border-radius:50%;background:var(--brand-soft);color:var(--brand);font-weight:800;display:grid;place-items:center}
 .nuevo-steps ul{margin:0;padding-left:18px;color:var(--ink-2)}
 #mbox.narrow:has(.wide){width:min(680px,96vw)}
+main.welcome #view{display:flex}  /* en el móvil la vista está oculta hasta abrir un mensaje: la bienvenida (sin cuentas) debe verse siempre */
