@@ -101,6 +101,10 @@
     <p class="mut" style="font-size:13px;margin-top:14px">La clave se guarda cifrada solo en tu móvil. Solo se envía a Google el texto que tú pidas resumir, responder o redactar; nada se manda a los creadores de la app.</p>`;
     $('#iaopen').onclick = () => nativoIA();
   };
-  const aplicar = () => { window.tabIA = tabIANativo; };
+  const aplicar = () => {
+    window.tabIA = tabIANativo;
+    // "Archivo local" (importar PST/MBOX) es una función del escritorio: no aplica en el móvil.
+    if (typeof TABS !== 'undefined') { const i = TABS.findIndex(t => t[0] === 'archivo'); if (i >= 0) TABS.splice(i, 1); }
+  };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', aplicar); else aplicar();
 })();

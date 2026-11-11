@@ -84,7 +84,7 @@ public final class Api {
         if (r.equals("/api/settings")) { if (m.equals("POST") && b.has("sendDelayMin")) alm.guardar("retraso", String.valueOf(b.optInt("sendDelayMin", 10))); return ok(new JSONObject().put("signatures", new JSONObject()).put("sendDelayMin", retraso())); }
         if (r.equals("/api/send-delay")) { if (!m.equals("GET")) alm.guardar("retraso", String.valueOf(Math.max(0, Math.min(10, b.optInt("minutes", 10))))); return ok(new JSONObject().put("minutes", retraso())); }
         if (r.equals("/api/yerleny")) return ok(new JSONObject().put("userName", "").put("notes", new JSONArray()));
-        if (r.equals("/api/archive/stats")) return ok("{\"messages\":0}");
+        if (r.equals("/api/archive/stats")) return ok(new JSONObject().put("messages", 0).put("folders", 0).put("storedBytes", 0).put("freeBytes", JSONObject.NULL).put("dir", ""));
         if (r.equals("/api/ai/config")) {
             if (m.equals("POST")) { ia.guardar(b.optString("apiKey", b.optString("clave", "")), b.optString("model", "")); return ok(estadoIA()); }
             return ia.configurada() ? ok(estadoIA()) : ok("null");

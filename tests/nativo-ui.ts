@@ -43,6 +43,7 @@ await pg.screenshot({ path: "/tmp/shots-n/n2-login.png" });
 await pg.fill("#nlw", "buena"); await pg.click("#nlgo"); await pg.waitForSelector(".m"); ok((await pg.locator(".m").count()) === 1, "iniciada la sesión, aparece la bandeja con el correo");
 const llamadas = await pg.evaluate(() => (window as any).llamadas as string[][]); ok(llamadas.some((l) => l[0] === "POST" && l[1] === "/api/accounts" && JSON.parse(l[2]).email === "yo@gmail.com"), "las llamadas /api van por el puente nativo");
 await pg.click("#cfg"); await pg.waitForSelector("#nlogin2"); ok(!(await pg.locator('[data-add="google"]').isVisible()), "en Cuentas no hay OAuth (solo inicio de sesión directo)");
+ok((await pg.locator('[data-tab="archivo"]').count()) === 0, "Ajustes no muestra 'Archivo local' (función del escritorio, no del móvil)");
 // Yerleny: pantalla de la clave de IA (Gemini)
 await pg.click('[data-tab="ia"]'); await pg.waitForSelector("#iaopen"); ok((await pg.locator("#iaopen").innerText()).includes("Activar"), "Ajustes → Yerleny ofrece activar la IA con una clave gratis");
 await pg.click("#iaopen"); await pg.waitForSelector("#iak"); ok((await pg.locator(".narrow-in").innerText()).includes("aistudio.google.com"), "la pantalla de IA enlaza a la clave gratuita de Gemini");
