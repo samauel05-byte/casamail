@@ -71,7 +71,7 @@ async function openFromNotif(n) {
 /* ---------- llegada de avisos (tiempo real) ---------- */
 function showNative(n) {
   if (NATIVE || !('Notification' in window) || Notification.permission !== 'granted' || document.hasFocus()) return; // si estás mirando CasaMail basta con el aviso en pantalla
-  try { const x = new Notification(n.title, { body: n.body, tag: 'cm' + n.id, icon: 'mark.svg' }); x.onclick = () => { window.focus(); x.close(); if (n.uid) openFromNotif(n); else openPanel(); }; } catch { /* sin permiso o no soportado */ }
+  try { const x = new Notification(n.title, { body: n.body, tag: 'cm' + n.id, icon: 'mark.png' }); x.onclick = () => { window.focus(); x.close(); if (n.uid) openFromNotif(n); else openPanel(); }; } catch { /* sin permiso o no soportado */ }
 }
 function onNew(items) { // más antiguos primero
   for (const n of items) {
