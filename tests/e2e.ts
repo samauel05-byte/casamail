@@ -5,6 +5,7 @@ process.env.CASAMAIL_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "casamail-"));
 process.env.CASAMAIL_ARCHIVE = path.join(process.env.CASAMAIL_HOME, "archive");
 process.env.CASAMAIL_IMAP_IDLE_MS = "1500"; // la conexión reutilizada se cierra tras 1,5 s sin uso (para poder probarlo)
 process.env.CASAMAIL_OAUTH_MOCK = "http://127.0.0.1:1300";
+process.env.CASAMAIL_AI_DOWN_MS = "0"; // (los motores caídos no se aparcan: así las pruebas de respaldo son deterministas; la sección de rapidez lo activa)
 const { startImap, startSmtp, startFakeAi, sentMails, startMockOAuth, oauth: mock, lastSystem, fakeStats } = await import("./servers.js");
 const store = await import("../src/store.js");
 const mail = await import("../src/mail.js");
@@ -441,6 +442,28 @@ await t("respaldo: si TODOS fallan, el error explica qué pasó con cada uno", a
 await t("un solo motor: el error es el del propio motor (sin ruido)", async () => {
   store.saveAiEngines([eng(1201, "limitado")]); let m = ""; try { await ai.testAi(); } catch (e) { m = (e as Error).message; } ok(/Rate limit/.test(m) && !/Ningún motor/.test(m), m);
 });
+console.log("  — rapidez de la IA");
+const hang = await mkSrv(1210, "b", () => { /* nunca responde: un motor colgado */ });
+await t("un motor que no responde se abandona a los pocos segundos (antes: 2 minutos) y responde el siguiente", async () => {
+  process.env.CASAMAIL_AI_TIMEOUT_MS = "700"; store.saveAiEngines([eng(1210, "colgado"), okEngine]); ai.resetEngineHealth();
+  const t0 = Date.now(); eq(await ai.testAi(), "OK"); const ms = Date.now() - t0; delete process.env.CASAMAIL_AI_TIMEOUT_MS; ok(ms < 3000, `tardó ${ms} ms`);
+});
+await t("un motor que acaba de fallar se prueba al final durante unos minutos (no se pierde tiempo en él cada vez)", async () => {
+  process.env.CASAMAIL_AI_DOWN_MS = "60000"; ai.resetEngineHealth(); store.saveAiEngines([eng(1201, "limitado"), okEngine]);
+  hits.a = 0; eq(await ai.testAi(), "OK"); eq(hits.a, 1, "la primera vez prueba el principal y falla");
+  eq(await ai.testAi(), "OK"); eq(await ai.testAi(), "OK"); eq(hits.a, 1, "las siguientes ya van directas al que funciona");
+  ai.resetEngineHealth(); await ai.testAi(); eq(hits.a, 2, "al reiniciar la memoria vuelve a probar el principal");
+  store.saveAiEngines([eng(1201, "limitado")]); let m = ""; try { await ai.testAi(); } catch (e) { m = (e as Error).message; } ok(/Rate limit/.test(m), "si es el único motor sigue intentándolo: " + m);
+  process.env.CASAMAIL_AI_DOWN_MS = "0"; ai.resetEngineHealth();
+});
+await t("resúmenes y respuestas se guardan por mensaje: la segunda vez es instantánea y no gasta IA; los fallos no se guardan", async () => {
+  ai.clearAiCache(); store.saveAiEngines([okEngine]); const mk = () => ai.cached("c|INBOX|7|resumen", () => ai.summarize({ from: "a@b.c", subject: "Hola", text: "Texto" }));
+  const c0 = fakeStats.total; const [a1, a2] = await Promise.all([mk(), mk()]); eq(a1, a2); eq(fakeStats.total - c0, 1, "dos peticiones simultáneas comparten una sola llamada a la IA");
+  const t0 = Date.now(); eq(await mk(), a1); ok(Date.now() - t0 < 20 && fakeStats.total - c0 === 1, "la tercera sale de la memoria");
+  let n = 0; const bad = () => ai.cached("k-fallo", async () => { n++; throw new Error("sin red"); }); await bad().catch(() => {}); await bad().catch(() => {}); eq(n, 2, "un fallo se reintenta");
+  ai.clearAiCache(); await mk(); eq(fakeStats.total - c0, 2, "al cambiar el motor o el perfil se vuelve a calcular");
+});
+hang.close(); hang.closeAllConnections?.();
 await t("sin motores configurados: mensaje claro con la salida gratuita", async () => {
   store.saveAiEngines([]); let m = ""; try { await ai.testAi(); } catch (e) { m = (e as Error).message; } ok(/Ajustes → Yerleny/.test(m) && /gratuitas/.test(m), m);
 });
@@ -794,6 +817,54 @@ console.log("\nAvisos: correo nuevo con resumen, reuniones y recordatorios");
     notify.clearAll(); eq(notify.list(0).items.length, 0);
   });
   seedC.logout().catch(() => {}); mail.closeConnections();
+}
+
+console.log("\nTiempo real (IMAP IDLE): correo nuevo al instante");
+{
+  const idle = await import("../src/idle.js"); const notify = await import("../src/notify.js"); const net = await import("node:net"); const { ImapFlow } = await import("imapflow");
+  for (const a of store.loadAccounts()) store.removeAccount(a.id);
+  const ps = { conns: 0, open: new Set<import("node:net").Socket>() };
+  const proxy = net.createServer((c) => { ps.conns++; ps.open.add(c); c.on("close", () => ps.open.delete(c)); const up = net.connect(1143, "127.0.0.1"); c.on("data", (d) => up.write(d)); up.on("data", (d) => c.write(d)); c.on("close", () => up.destroy()); up.on("close", () => c.destroy()); c.on("error", () => up.destroy()); up.on("error", () => c.destroy()); });
+  await new Promise<void>((r) => proxy.listen(1146, "127.0.0.1", r));
+  store.addAccount(store.buildAccount({ id: "vivo", email: "yo@casa.test", pass: "secreto", user: "yo", imap: { host: "127.0.0.1", port: 1146, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } }));
+  const other = async (fn: (c: InstanceType<typeof ImapFlow>) => Promise<void>) => { const c = new ImapFlow({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await c.connect(); try { await fn(c); } finally { await c.logout().catch(() => {}); } };
+  const wait = async (cond: () => boolean, ms: number) => { const t0 = Date.now(); while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 25)); return Date.now() - t0; };
+  const raw = (subj: string) => Buffer.from(`From: Marta Ruiz <marta@estudio.es>\r\nTo: yo@casa.test\r\nSubject: ${subj}\r\nDate: ${new Date().toUTCString()}\r\nMessage-ID: <${Date.now()}${Math.random()}@x>\r\n\r\nHola, esto es ${subj}`);
+  store.saveAiEngines([]); notify.saveSettings({ enabled: true, mail: true, aiSummary: false, meetings: false });
+  await notify.checkMail(); // base: lo que ya había no se avisa
+  idle.sync(); await wait(() => ps.open.size >= 1, 4000);
+
+  await t("una conexión en espera por cuenta (IDLE), sin marcar nada como leído", async () => { await new Promise((r) => setTimeout(r, 400)); eq(ps.open.size, 1); });
+  await t("correo nuevo: la interfaz se entera y el aviso sale en ~1 s (sin esperar al sondeo de 1 minuto)", async () => {
+    const seq = idle.lastSeq(), last = notify.list().last, t0 = Date.now();
+    const w = idle.waitChange(seq, 6000); await other((c) => c.append("INBOX", raw("Llegada instantánea"), []).then(() => {}));
+    const r = await w; ok(r.accounts.includes("vivo"), "no avisó de la cuenta: " + JSON.stringify(r)); const tChange = Date.now() - t0;
+    await wait(() => notify.list(last).items.length > 0, 4000); const tNotif = Date.now() - t0;
+    const n = notify.list(last).items[0]; ok(n && n.body.includes("Llegada instantánea"), "sin aviso: " + JSON.stringify(n)); ok(tChange < 2500 && tNotif < 3500, `demasiado lento: cambio ${tChange} ms, aviso ${tNotif} ms`);
+    console.log(`      (cambio en ${tChange} ms, aviso en ${tNotif} ms)`);
+  });
+  await t("correo leído o borrado desde otro dispositivo también se refleja al instante", async () => {
+    let seq = idle.lastSeq(); let w = idle.waitChange(seq, 6000); await other(async (c) => { await c.mailboxOpen("INBOX"); const u = ((await c.search({ all: true }, { uid: true })) || [])[0]; await c.messageFlagsAdd(String(u), ["\\Seen"], { uid: true }); });
+    ok((await w).accounts.includes("vivo"), "cambio de estado no detectado");
+    seq = idle.lastSeq(); w = idle.waitChange(seq, 6000); await other(async (c) => { await c.mailboxOpen("INBOX"); const u = ((await c.search({ all: true }, { uid: true })) || [])[0]; await c.messageDelete(String(u), { uid: true }); });
+    ok((await w).accounts.includes("vivo"), "borrado no detectado");
+  });
+  await t("varios correos seguidos: un solo aviso por correo, ninguno repetido", async () => {
+    const last = notify.list().last; await other(async (c) => { for (let i = 0; i < 3; i++) await c.append("INBOX", raw("Ráfaga " + i), []); });
+    await wait(() => notify.list(last).items.filter((x) => x.kind === "mail").length >= 3, 6000); await new Promise((r) => setTimeout(r, 1500));
+    const bodies = notify.list(last).items.filter((x) => x.kind === "mail").map((x) => x.body.split("\n")[0]).sort(); eq(bodies, ["Ráfaga 0", "Ráfaga 1", "Ráfaga 2"]);
+  });
+  await t("si se cae la conexión, se reconecta sola y sigue avisando", async () => {
+    for (const s of ps.open) s.destroy(); await wait(() => ps.open.size === 0, 2000); const before = ps.conns; await wait(() => ps.conns > before && ps.open.size === 1, 8000); eq(ps.open.size, 1, "no se reconectó");
+    const last = notify.list().last; await other((c) => c.append("INBOX", raw("Tras reconexión"), []).then(() => {})); await wait(() => notify.list(last).items.length > 0, 5000); ok(notify.list(last).items[0]?.body.includes("Tras reconexión"), "no avisó tras reconectar");
+  });
+  await t("contraseña mala: reintenta con esperas crecientes, sin fugas de conexiones ni bucle rápido", async () => {
+    idle.stopAll(); await wait(() => ps.open.size === 0, 3000); store.updateAccount("vivo", (a) => ({ ...a, pass: "mala" })); const c0 = ps.conns; idle.sync(); await new Promise((r) => setTimeout(r, 5000));
+    ok(ps.conns - c0 <= 3, "demasiados intentos: " + (ps.conns - c0)); ok(ps.open.size <= 1, "conexiones abiertas: " + ps.open.size);
+    store.updateAccount("vivo", (a) => ({ ...a, pass: "secreto" })); idle.sync(); await wait(() => ps.open.size === 1, 6000); eq(ps.open.size, 1, "al corregir la contraseña debe volver a vigilar");
+  });
+  await t("al quitar la cuenta se cierra su vigilante (no quedan conexiones abiertas)", async () => { store.removeAccount("vivo"); idle.sync(); await wait(() => ps.open.size === 0, 4000); eq(ps.open.size, 0); });
+  idle.stopAll(); mail.closeConnections(); proxy.close();
 }
 
 console.log("\nModo remoto (app Android): seguridad");

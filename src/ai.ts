@@ -14,8 +14,26 @@ export type Msg =
 const NOT_CONFIGURED = "Yerleny aún no tiene un motor de IA. Conecta uno en Ajustes → Yerleny (hay opciones gratuitas, incluso sin cuenta).";
 export const engineLabel = (c: AiConfig) => `${c.preset ?? c.provider} · ${c.model}`;
 
+const down = new Map<string, number>();
+const eid = (e: AiConfig) => `${e.provider}|${e.baseUrl}|${e.model}`;
+const DOWN_MS = () => Number(process.env.CASAMAIL_AI_DOWN_MS ?? 3 * 60_000);
+const isDown = (e: AiConfig) => { const t = down.get(eid(e)); return !!t && Date.now() - t < DOWN_MS(); };
+export const resetEngineHealth = () => down.clear();
+
+/** Respuestas de IA guardadas por mensaje (un mensaje no cambia): abrir de nuevo un resumen es instantáneo. Se comparte entre peticiones simultáneas. */
+const memo = new Map<string, Promise<unknown>>();
+export function cached<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const hit = memo.get(key) as Promise<T> | undefined; if (hit) { memo.delete(key); memo.set(key, hit); return hit; }
+  const p = fn(); memo.set(key, p); p.catch(() => memo.delete(key)); // los fallos no se guardan
+  if (memo.size > 300) memo.delete(memo.keys().next().value!);
+  return p;
+}
+export const clearAiCache = () => memo.clear();
+
+/** Una respuesta de un motor en la nube que tarda más de esto se da por perdida y se pasa al siguiente (antes esperaba 2 minutos). */
+const CLOUD_TIMEOUT = () => Number(process.env.CASAMAIL_AI_TIMEOUT_MS ?? 45_000);
 async function post(url: string, headers: Record<string, string>, body: unknown) {
-  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(120_000) });
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body), signal: AbortSignal.timeout(CLOUD_TIMEOUT()) });
   const t = await r.text();
   if (!r.ok) throw new Error(`El proveedor de IA respondió ${r.status}: ${t.slice(0, 300)}`);
   try { return JSON.parse(t); } catch { throw new Error("Respuesta no válida del proveedor de IA"); }
@@ -51,12 +69,14 @@ type ChatResult = { text: string; toolCalls: ToolCall[] };
  * prueba el siguiente, en el orden que el usuario eligió. Si todos fallan, explica qué pasó con cada uno.
  */
 export async function chat(o: ChatOpts, only?: AiConfig): Promise<ChatResult> {
-  const engines = only ? [only] : getAiEngines();
-  if (!engines.length) throw new Error(NOT_CONFIGURED);
+  const all = only ? [only] : getAiEngines();
+  if (!all.length) throw new Error(NOT_CONFIGURED);
+  // Un motor que acaba de fallar (límite gratuito agotado, sin red…) se prueba al final durante unos minutos: así no se pierde tiempo en él cada vez.
+  const engines = only ? all : [...all.filter((e) => !isDown(e)), ...all.filter(isDown)];
   const failures: string[] = [];
   for (const e of engines) {
-    try { return await chatWith(e, o); }
-    catch (err) { failures.push(`${engineLabel(e)}: ${(err as Error).message}`); }
+    try { const r = await chatWith(e, o); down.delete(eid(e)); return r; }
+    catch (err) { if (!only) down.set(eid(e), Date.now()); failures.push(`${engineLabel(e)}: ${(err as Error).message}`); }
   }
   if (engines.length === 1) throw new Error(failures[0].replace(/^[^:]+: /, ""));
   throw new Error(`Ningún motor de IA pudo responder:\n- ${failures.join("\n- ")}`);

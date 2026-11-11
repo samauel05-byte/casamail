@@ -13,6 +13,7 @@ import * as ai from "./ai.js";
 import * as localLlm from "./local-llm.js";
 import * as outbox from "./outbox.js";
 import * as notify from "./notify.js";
+import * as idle from "./idle.js";
 import * as cal from "./calendar.js";
 import * as oauth from "./oauth.js";
 import * as archive from "./archive.js";
@@ -324,6 +325,7 @@ const lock = outbox.createSchedulerLock();
 async function tick() {
   if (!lock.acquire()) return; // otra instancia de CasaMail es la que envía
   await outbox.tick();
+  idle.sync(); // vigilantes de correo en tiempo real: uno por cuenta (se ajustan solos al añadir o quitar cuentas)
   await notify.tick().catch((e) => console.warn("[avisos]", (e as Error).message));
   const sn = store.readJson<Snooze[]>("snoozed.json", []);
   const due = sn.filter((s) => s.until <= Date.now());
@@ -338,17 +340,17 @@ app.get("/api/yerleny", h(async () => store.getYerleny()));
 app.post("/api/yerleny", h(async (r) => {
   const cur = store.getYerleny(), b = r.body as Partial<store.YerlenyProfile>;
   store.saveYerleny({ userName: b.userName ?? cur.userName, tone: b.tone ?? cur.tone, language: b.language ?? cur.language, notes: cur.notes });
-  return store.getYerleny();
+  ai.clearAiCache(); return store.getYerleny();
 }));
-app.post("/api/yerleny/notes", h(async (r) => store.addYerlenyNote(String(r.body.note ?? ""))));
-app.delete("/api/yerleny/notes/:i", h(async (r) => store.removeYerlenyNote(Number(r.params.i))));
+app.post("/api/yerleny/notes", h(async (r) => { ai.clearAiCache(); return store.addYerlenyNote(String(r.body.note ?? "")); }));
+app.delete("/api/yerleny/notes/:i", h(async (r) => { ai.clearAiCache(); return store.removeYerlenyNote(Number(r.params.i)); }));
 app.get("/api/ai/ollama", h(async () => ai.detectOllama()));
 app.get("/api/ai/presets", h(async () => store.AI_PRESETS));
 app.get("/api/ai/config", h(async () => { const c = store.getAiConfig(); return c ? { ...c, apiKey: c.apiKey ? "••••" + c.apiKey.slice(-4) : "", hasKey: !!c.apiKey } : null; }));
 app.post("/api/ai/config", h(async (r) => {
   const old = store.getAiConfig(), b = r.body as store.AiConfig;
   const key = !b.apiKey || b.apiKey.startsWith("••••") ? old?.apiKey ?? "" : b.apiKey;
-  store.saveAiConfig({ provider: b.provider, baseUrl: b.baseUrl.trim(), model: b.model.trim(), apiKey: key, preset: b.preset });
+  store.saveAiConfig({ provider: b.provider, baseUrl: b.baseUrl.trim(), model: b.model.trim(), apiKey: key, preset: b.preset }); ai.clearAiCache(); ai.resetEngineHealth();
   return { ok: true };
 }));
 const maskKey = (k: string) => (k ? "••••" + k.slice(-4) : "");
@@ -362,7 +364,7 @@ app.post("/api/ai/engines", h(async (r) => {
     const apiKey = !e.apiKey || e.apiKey.startsWith("••••") ? prev?.apiKey ?? "" : e.apiKey; // una clave enmascarada conserva la guardada
     return { provider: e.provider, baseUrl: (e.baseUrl ?? "").trim(), model: String(e.model ?? "").trim(), apiKey, preset: e.preset, id: e.id } as store.AiConfig;
   }).filter(store.aiValid);
-  store.saveAiEngines(merged);
+  store.saveAiEngines(merged); ai.clearAiCache(); ai.resetEngineHealth();
   return store.getAiEngines().map(publicEngine);
 }));
 /** Modelos que ofrece un proveedor (los gratuitos cambian a menudo, por eso se detectan en vivo). */
@@ -393,8 +395,9 @@ app.post("/api/ai/test", h(async (r) => {
   if (id) { const e = store.getAiEngines().find((x) => x.id === id); if (!e) throw new Error("Motor no encontrado"); return { reply: await ai.testEngine(e), engine: ai.engineLabel(e) }; }
   return { reply: await ai.testAi() };
 }));
-app.post("/api/ai/summarize", h(async (r) => ({ summary: await ai.summarize(await load(r)) })));
-app.post("/api/ai/replies", h(async (r) => ({ options: await ai.replyOptions(await load(r), r.body.language) })));
+const mkey = (r: Request, kind: string) => [isLocal(r) ? "local" : acc(r).id, (r.body.folder as string) || "INBOX", r.body.uid, kind, r.body.language ?? ""].join("|");
+app.post("/api/ai/summarize", h(async (r) => ({ summary: await ai.cached(mkey(r, "resumen"), async () => ai.summarize(await load(r))) })));
+app.post("/api/ai/replies", h(async (r) => ({ options: await ai.cached(mkey(r, "respuestas"), async () => ai.replyOptions(await load(r), r.body.language)) })));
 app.post("/api/ai/draft", h(async (r) => ai.draft({ instruction: r.body.instruction, tone: r.body.tone, language: r.body.language, original: r.body.uid ? await load(r) : undefined })));
 app.post("/api/ai/rewrite", h(async (r) => ({ text: await ai.rewrite(String(r.body.text), String(r.body.mode)) })));
 app.post("/api/ai/search", h(async (r) => {
@@ -416,6 +419,11 @@ app.post("/api/ai/agent", h(async (r) => {
 
 // ---------- avisos (notificaciones) y calendario ----------
 const toMs = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && v ? Date.parse(v) : NaN);
+/** Cambios en los buzones en tiempo real (IMAP IDLE): la interfaz lo espera y se actualiza al instante. */
+app.get("/api/changes", async (req, res) => {
+  const since = Number(req.query.since ?? idle.lastSeq()) || 0, wait = Math.min(Number(req.query.wait ?? 0) || 0, 30) * 1000;
+  try { res.json(await idle.waitChange(since, wait)); } catch (e) { res.status(500).json({ error: String((e as Error).message) }); }
+});
 app.get("/api/notifications", async (req, res) => {
   const after = Number(req.query.after ?? 0) || 0, wait = Math.min(Number(req.query.wait ?? 0) || 0, 30) * 1000;
   try { res.json(wait ? await notify.waitFor(after, wait) : notify.list(after)); } catch (e) { res.status(500).json({ error: String((e as Error).message) }); }
@@ -489,7 +497,7 @@ export async function startServer(o: { port?: number; fallbackRandom?: boolean; 
   return {
     onNotify: (fn) => { notify.bus.on("notify", fn); return () => notify.bus.off("notify", fn); },
     port: PORT, url, origin, token: TOKEN, allowImportPath, activeJobs: jobs.activeCount,
-    close: () => new Promise<void>((resolve) => { clearInterval(timer); lock.release(); mail.closeConnections(); server.close(() => resolve()); server.closeAllConnections?.(); }),
+    close: () => new Promise<void>((resolve) => { clearInterval(timer); idle.stopAll(); lock.release(); mail.closeConnections(); server.close(() => resolve()); server.closeAllConnections?.(); }),
   };
 }
 

@@ -35,9 +35,9 @@ async function smtp(acc: Account) {
 const IDLE_MS = Number(process.env.CASAMAIL_IMAP_IDLE_MS ?? 4 * 60_000);
 interface Pooled { client: ImapFlow; key: string; timer?: NodeJS.Timeout }
 const pool = new Map<string, Pooled>(), connecting = new Map<string, Promise<Pooled>>();
-const fingerprint = (a: Account) => [a.imap.host, a.imap.port, a.imap.secure, a.user, a.pass, a.oauth?.refreshToken ?? ""].join("|"); // si cambian las credenciales, se reconecta
+export const fingerprint = (a: Account) => [a.imap.host, a.imap.port, a.imap.secure, a.user, a.pass, a.oauth?.refreshToken ?? ""].join("|"); // si cambian las credenciales, se reconecta
 
-async function openImap(acc: Account): Promise<ImapFlow> {
+export async function openImap(acc: Account): Promise<ImapFlow> {
   const c = new ImapFlow({ host: acc.imap.host, port: acc.imap.port, secure: acc.imap.secure, auth: await imapAuth(acc), logger: false });
   c.on("error", () => {});
   try { await c.connect(); }
