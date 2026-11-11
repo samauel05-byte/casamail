@@ -134,6 +134,17 @@ public final class IA {
         return generar("Reescribes texto de correos. " + ins + " Devuelve SOLO el texto resultante, sin comillas ni comentarios.", texto, 0.3, 800);
     }
 
+    /** Prioriza (triage) una lista de correos solo por sus cabeceras. Devuelve [{uid, priority, category, why}]. */
+    public JSONArray triage(JSONArray msgs) throws ErrorIA, JSONException {
+        StringBuilder rows = new StringBuilder(); int n = Math.min(msgs.length(), 40);
+        for (int i = 0; i < n; i++) { JSONObject m = msgs.optJSONObject(i); if (m == null) continue; rows.append(m.optLong("uid")).append("\t").append(m.optString("from")).append("\t").append(m.optString("subject")).append("\t").append(m.optString("date", "")).append("\n"); }
+        if (rows.length() == 0) return new JSONArray();
+        String raw = generar("Clasifica correos solo por sus cabeceras. Devuelve SOLO JSON: [{\"uid\": number, \"priority\": 1|2|3 (3=urgente/requiere acción, 1=ignorable), \"category\": \"personal\"|\"trabajo\"|\"facturas\"|\"newsletter\"|\"notificación\"|\"social\"|\"sospechoso\", \"why\": string de máx. 8 palabras}]. " + SEG, rows.toString(), 0, 1500);
+        JSONArray arr = json(raw), out = new JSONArray();
+        if (arr != null) for (int i = 0; i < arr.length(); i++) { JSONObject o = arr.optJSONObject(i); if (o != null && o.has("uid")) out.put(o); }
+        return out;
+    }
+
     /** Chat sencillo del asistente: responde y, si el usuario pide escribir un correo, puede devolver un borrador. */
     public JSONObject chat(JSONArray history, String texto) throws ErrorIA, JSONException {
         StringBuilder conv = new StringBuilder();

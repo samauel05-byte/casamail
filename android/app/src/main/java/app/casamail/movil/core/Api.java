@@ -278,6 +278,7 @@ public final class Api {
             if (r.equals("/api/ai/test")) return ok(new JSONObject().put("reply", ia.probar()));
             if (r.equals("/api/ai/rewrite")) return ok(new JSONObject().put("text", ia.reescribir(b.optString("text"), b.optString("mode", ""))));
             if (r.equals("/api/ai/agent")) return ok(ia.chat(b.optJSONArray("history"), b.optString("text")));
+            if (r.equals("/api/ai/triage")) { JSONObject pag = correo.mensajes(cuenta(q), q.getOrDefault("folder", "INBOX"), 40, 0, false); return ok(new JSONObject().put("items", ia.triage(pag.getJSONArray("messages")))); }
             if (r.equals("/api/ai/summarize")) { JSONObject msg = correo.mensaje(cuenta(q), b.optString("folder", "INBOX"), b.getLong("uid"), false); return ok(new JSONObject().put("summary", ia.resumir(msg))); }
             if (r.equals("/api/ai/replies")) { JSONObject msg = correo.mensaje(cuenta(q), b.optString("folder", "INBOX"), b.getLong("uid"), false); return ok(new JSONObject().put("options", ia.respuestas(msg))); }
             if (r.equals("/api/ai/draft")) {
