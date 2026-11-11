@@ -80,7 +80,6 @@
     $('#iasave').onclick = async e => {
       const k = $('#iak').value.trim(); if (!k) { $('#iast').innerHTML = '<span class="err">Pega la clave primero.</span>'; return; }
       const b = e.currentTarget; busy(b, true); $('#iast').textContent = 'Comprobando…';
-      try { await api('/api/ai/test', {}); } catch { /* el test real va tras guardar */ }
       try { await api('/api/ai/config', { apiKey: k }); const t = await api('/api/ai/test', {}); S.aiOk = true; $('#iast').innerHTML = `<span class="ok">Listo ✔ (${esc(t.reply)})</span>`; toast('Yerleny activada'); setTimeout(closeModal, 900); }
       catch (x) { S.aiOk = false; $('#iast').innerHTML = `<span class="err">${esc(x.message)}</span>`; busy(b, false); }
     };
