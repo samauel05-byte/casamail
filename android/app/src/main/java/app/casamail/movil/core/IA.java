@@ -22,7 +22,7 @@ public final class IA {
     public static final class ErrorIA extends Exception { public ErrorIA(String m) { super(m); } }
 
     private static final String HOST = "https://generativelanguage.googleapis.com/v1beta/models/";
-    private static final String MODELO_DEF = "gemini-2.0-flash";
+    private static final String MODELO_DEF = "gemini-flash-latest";   // alias que Google mantiene apuntando al último modelo Flash (gratuito); evita que se rompa al retirar versiones
     private final Almacen alm;
 
     public IA(Almacen alm) { this.alm = alm; }
