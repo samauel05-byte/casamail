@@ -9,7 +9,7 @@ const { chromium } = await import(process.env.PW_PATH ?? "playwright");
 startImap(); startSmtp(); startFakeAi(); await new Promise((r) => setTimeout(r, 400));
 store.addAccount(store.buildAccount({ id: "casa", email: "yo@casa.test", pass: "secreto", user: "yo", imap: { host: "127.0.0.1", port: 1143, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } }));
 store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });
-const web = spawn("node", ["--import", "tsx", "src/web.ts"], { env: { ...process.env, PORT: "8079", CASAMAIL_TOKEN: "tok", CASAMAIL_NO_OPEN: "1", CASAMAIL_NO_WARMUP: "1", CASAMAIL_NOTIFY_EVERY_MS: "1500" }, stdio: "inherit" });
+const web = spawn("node", ["--import", "tsx", "src/web.ts"], { env: { ...process.env, PORT: "8079", CASAMAIL_TOKEN: "tok", CASAMAIL_NO_OPEN: "1", CASAMAIL_NO_WARMUP: "1", CASAMAIL_NOTIFY_EVERY_MS: "600000" }, stdio: "inherit" });
 process.on("exit", () => web.kill());
 await new Promise((r) => setTimeout(r, 4000));
 const b = await chromium.launch(); const ctx = await b.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
@@ -19,7 +19,9 @@ const ok = (c: unknown, m: string) => { console.log(c ? "  ✔" : "  ✘", m); i
 const c = new ImapFlow({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await c.connect();
 const fut = Date.now() + 3 * 864e5, D = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
 const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "METHOD:REQUEST", "BEGIN:VEVENT", "UID:ui-1", `DTSTART:${D(fut)}`, `DTEND:${D(fut + 3600_000)}`, "SUMMARY:Revisión trimestral", "LOCATION:Sala Madrid", "DESCRIPTION:https://meet.google.com/abc-defg-hij", "END:VEVENT", "END:VCALENDAR"].join("\r\n");
+const tAppend = Date.now();
 await c.append("INBOX", await new MailComposer({ from: "Marta Ruiz <marta@estudio.es>", to: "yo@casa.test", subject: "Invitación: Revisión trimestral", text: "Os invito a la revisión.", icalEvent: { method: "REQUEST", content: ics }, messageId: "<ui1@x>" }).compile().build(), []);
+await pg.waitForSelector(".m:has-text(\"Invitación: Revisión trimestral\")", { timeout: 8000 }); ok(Date.now() - tAppend < 5000, `la lista se actualiza sola al llegar el correo (${Date.now() - tAppend} ms, sin recargar y sin esperar al sondeo)`);
 await pg.waitForSelector(".toast", { timeout: 20000 }); ok(true, "llega un aviso en pantalla sin recargar");
 await pg.waitForFunction(() => document.querySelector("#bdg")!.textContent === "2", null, { timeout: 8000 }); ok(true, "la campana cuenta 2 avisos (correo + reunión)");
 await pg.click("#bell"); await pg.waitForSelector("#npanel .nrow"); await pg.waitForTimeout(500); await pg.screenshot({ path: "/tmp/shots-n/1-panel.png" });
