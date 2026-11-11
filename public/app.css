@@ -409,3 +409,8 @@ main.welcome #view{display:flex}  /* en el móvil la vista está oculta hasta ab
 .calday::first-letter{text-transform:uppercase}
 /* móvil: el calendario y otros cuadros estrechos no se cortan por la derecha */
 @media(max-width:560px){#mbox.narrow{padding:16px}.narrow-in .row{flex-wrap:wrap}.calev{flex-wrap:wrap}.calev .grow{min-width:0;flex:1 1 140px}}
+
+/* informar de un problema con la IA */
+.rep{border:0;background:none;color:var(--ink-3);font-size:12px;text-decoration:underline;cursor:pointer;padding:6px 0 0;display:block}
+.rep:hover{color:var(--bad)}
+.bub.bot .rep{padding-top:4px}.aibox-h .rep{margin-left:auto;padding:0}
