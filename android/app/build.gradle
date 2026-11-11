@@ -17,7 +17,7 @@ android {
     compileSdk = 36
     defaultConfig {
         applicationId = "app.casamail.movil"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 36
         versionCode = vcode
         versionName = vname
