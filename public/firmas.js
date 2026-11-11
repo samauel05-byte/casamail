@@ -82,7 +82,7 @@ async function sigImport(acc, btn) {
 
 /** Editor de una firma: escribe, pega (Ctrl+V desde Outlook) o sube tu logo. */
 function sigEditor(acc, it, onSave) {
-  openModal(`<div class="narrow-in" style="width:min(640px,92vw)"><h3 style="font-size:20px">${it && it.id !== undefined && it.name ? 'Editar firma' : 'Nueva firma'}</h3>
+  openModal(`<div class="narrow-in wide"><h3 style="font-size:20px">${it && it.id !== undefined && it.name ? 'Editar firma' : 'Nueva firma'}</h3>
     <label class="lb">Nombre (solo para ti)</label><input id="sgn" class="field" maxlength="60" value="${esc(it ? it.name : 'Principal')}">
     <label class="lb">Firma</label>
     <div class="sgtb"><button type="button" data-cmd="bold" title="Negrita"><b>N</b></button><button type="button" data-cmd="italic" title="Cursiva"><i>K</i></button><button type="button" data-cmd="underline" title="Subrayado"><u>S</u></button>

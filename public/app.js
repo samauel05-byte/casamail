@@ -127,9 +127,12 @@ function renderWelcome() {
   $('#list').innerHTML = '';
   $('#view').innerHTML = `<div class="empty" style="min-height:100%"><div style="margin-bottom:8px">${LOGO(150)}</div>
     <h3 style="font-size:26px;letter-spacing:-.02em">Bienvenido a CasaMail</h3>
-    <p>Tu correo, en tu propio equipo. Conecta tu primera cuenta para empezar: no hay servidores intermedios y tus mensajes no salen de aquí.</p>
-    <div class="row" style="justify-content:center;margin-top:14px"><button class="btn btn-primary" data-add-first="google">Conectar Gmail</button><button class="btn" data-add-first="microsoft">Conectar Outlook</button><button class="btn" data-add-first="imap">Otra cuenta (IMAP)</button><button class="btn" data-add-first="archivo">Importar un PST / MBOX</button></div></div>`;
+    <p>Tu correo, en tu propio equipo. Crea una cuenta nueva o conecta la que ya tienes: no hay servidores intermedios y tus mensajes no salen de aquí.</p>
+    <div class="row" style="justify-content:center;margin-top:14px"><button class="btn btn-primary btn-lg" id="crearcuenta">${I('plus', 'sm')} Crear correo nuevo</button></div>
+    <p class="mut" style="margin:18px 0 4px">¿Ya tienes correo? Conéctalo:</p>
+    <div class="row" style="justify-content:center;margin-top:4px"><button class="btn" data-add-first="google">Conectar Gmail</button><button class="btn" data-add-first="microsoft">Conectar Outlook</button><button class="btn" data-add-first="imap">Otra cuenta (IMAP)</button><button class="btn" data-add-first="archivo">Importar un PST / MBOX</button></div></div>`;
   $$('[data-add-first]').forEach(b => b.onclick = () => (b.dataset.addFirst === 'archivo' ? settings('archivo') : settings('cuentas', b.dataset.addFirst)));
+  $('#crearcuenta').onclick = () => crearCuenta();
 }
 function resetView() {
   $('#main').classList.remove('reading');
@@ -423,30 +426,32 @@ function closeModal() { $('#modal').hidden = true; clearInterval(modalTimer); oa
 $('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
 $('#cfg').onclick = () => settings('cuentas');
 const TABS = [['cuentas', 'user', 'Cuentas'], ['archivo', 'hdd', 'Archivo local'], ['ia', 'sparkles', 'Yerleny'], ['firma', 'pencil', 'Firma'], ['avisos', 'bell', 'Avisos'], ['envio', 'clock', 'Envío'], ['salida', 'send', 'Salida']];
-function settings(tab = 'cuentas', pre) {
+function settings(tab = 'cuentas', pre, extra) {
   openModal(`<nav class="set-nav"><h3>Ajustes</h3>${TABS.map(([k, ic, l]) => `<div class="nav ${k === tab ? 'on' : ''}" data-tab="${k}" role="button" tabindex="0">${I(ic)}<span>${l}</span></div>`).join('')}</nav><div class="set-body" id="sbody"><button class="iconbtn set-close" id="mx" aria-label="Cerrar">${I('x')}</button><div id="tabc"><div class="wait"><div class="spin"></div></div></div></div>`);
   clearInterval(modalTimer); $('#mx').onclick = closeModal; $$('[data-tab]').forEach(n => n.onclick = () => settings(n.dataset.tab));
-  ({ cuentas: tabCuentas, archivo: tabArchivo, ia: tabIA, firma: tabFirma, avisos: tabAvisos, envio: tabEnvio, salida: tabSalida })[tab]($('#tabc'), pre).catch(e => { $('#tabc').innerHTML = `<p class="err">${esc(e.message)}</p>`; });
+  ({ cuentas: tabCuentas, archivo: tabArchivo, ia: tabIA, firma: tabFirma, avisos: tabAvisos, envio: tabEnvio, salida: tabSalida })[tab]($('#tabc'), pre, extra).catch(e => { $('#tabc').innerHTML = `<p class="err">${esc(e.message)}</p>`; });
 }
 const provMark = { google: ['G', '#d9483b'], microsoft: ['M', '#2a6fdb'], imap: ['@', '#6b6558'] };
 
-async function tabCuentas(c, pre) {
+async function tabCuentas(c, pre, extra) {
   const accts = await api('/api/accounts'); S.accounts = accts;
   c.innerHTML = `<h3>Cuentas</h3><p class="lead">Conecta tus correos. Las contraseñas y tokens se guardan solo en este equipo.</p>
     ${accts.map(a => `<div class="acct-row">${avatar(a.email, a.email)}<div class="grow"><b>${esc(a.email)}</b><span class="mut">${a.auth === 'oauth' ? `Conectada con ${a.provider === 'google' ? 'Google' : 'Microsoft'} (OAuth, sin contraseña)` : 'Usuario y contraseña (IMAP/SMTP)'}</span></div>${a.auth === 'oauth' ? `<button class="btn btn-sm" data-recon="${esc(a.provider)}" data-email="${esc(a.email)}">Reconectar</button>` : ''}<button class="btn btn-ghost btn-sm" data-del="${esc(a.id)}">Quitar</button></div>`).join('') || '<div class="note">Aún no hay cuentas.</div>'}
     <h4>Añadir cuenta</h4>
     <div class="add-cards">
+      <button class="add-card nuevo" id="crearcuenta2"><span class="mk" style="background:var(--brand)">+</span><b>Crear un correo nuevo</b><span>¿No tienes correo? Gmail, Outlook, Yahoo, iCloud o Zoho: te llevamos al registro y la conectamos.</span></button>
       <button class="add-card" data-add="google"><span class="mk" style="background:${provMark.google[1]}">G</span><b>Gmail / Google</b><span>Inicio de sesión seguro con OAuth. Sin contraseñas.</span></button>
       <button class="add-card" data-add="microsoft"><span class="mk" style="background:${provMark.microsoft[1]}">M</span><b>Outlook / Microsoft</b><span>Outlook.com, Hotmail y Microsoft 365 con OAuth.</span></button>
       <button class="add-card" data-add="imap"><span class="mk" style="background:${provMark.imap[1]}">@</span><b>Otra cuenta (IMAP)</b><span>Yahoo, iCloud, Fastmail, tu dominio…</span></button>
     </div><div id="addpane"></div>`;
   $$('[data-add]').forEach(b => b.onclick = () => addPane(b.dataset.add));
+  $('#crearcuenta2').onclick = () => crearCuenta();
   $$('[data-recon]').forEach(b => b.onclick = () => addPane(b.dataset.recon, b.dataset.email));
   $$('[data-del]').forEach(b => b.onclick = async () => { if (confirm('¿Quitar esta cuenta de CasaMail? (No borra tus correos.)')) { await api('/api/accounts/' + encodeURIComponent(b.dataset.del), undefined, 'DELETE'); await init(); settings('cuentas'); } });
-  if (pre) addPane(pre);
+  if (pre) addPane(pre, undefined, extra);
 }
 const copyBtn = t => `<button class="iconbtn sm" data-copy="${esc(t)}" aria-label="Copiar" title="Copiar">${I('copy', 'sm')}</button>`;
-async function addPane(kind, hint) {
+async function addPane(kind, hint, preset) {
   $$('.add-card').forEach(b => b.classList.toggle('on', b.dataset.add === kind)); const p = $('#addpane'); p.className = 'pane-add';
   if (kind === 'imap') {
     const pr = await api('/api/presets');
@@ -454,7 +459,7 @@ async function addPane(kind, hint) {
       <label class="lb">Email</label><input id="ne" type="email" class="field" autocomplete="off"><label class="lb">Contraseña (o contraseña de aplicación)</label><input id="nw" type="password" class="field" autocomplete="new-password">
       <div id="nm" hidden><label class="lb">Servidor IMAP</label><input id="ni" class="field" placeholder="imap.midominio.com"><label class="lb">Puerto IMAP</label><input id="nip" class="field" value="993"><label class="lb">Servidor SMTP</label><input id="ns" class="field" placeholder="smtp.midominio.com"><label class="lb">Puerto SMTP (465 SSL · 587 STARTTLS)</label><input id="nsp" class="field" value="465"></div>
       <div class="row" style="margin-top:16px"><button class="btn btn-primary" id="na">Probar y guardar</button><span id="nst" class="mut"></span></div>`;
-    const notes = Object.fromEntries(pr.map(x => [x.id, x.note])); const upd = () => { $('#nm').hidden = $('#np').value !== 'otro'; $('#pn').textContent = notes[$('#np').value] || ''; }; $('#np').onchange = upd; upd();
+    const notes = Object.fromEntries(pr.map(x => [x.id, x.note])); const upd = () => { $('#nm').hidden = $('#np').value !== 'otro'; const v = $('#np').value, l = typeof APP_PASSWORD !== 'undefined' && APP_PASSWORD[v]; $('#pn').innerHTML = esc(notes[v] || '') + (l ? ` <a href="${l}" target="_blank" rel="noopener noreferrer">Crear la contraseña de aplicación →</a>` : ''); }; $('#np').onchange = upd; if (preset && [...$('#np').options].some(o => o.value === preset || o.text === preset)) $('#np').value = preset; upd();
     $('#na').onclick = async e => { const b = e.currentTarget; busy(b, true); $('#nst').textContent = 'Probando IMAP y SMTP…'; try { await api('/api/accounts', { email: $('#ne').value.trim(), pass: $('#nw').value, preset: $('#np').value, imapHost: $('#ni').value, imapPort: Number($('#nip').value), smtpHost: $('#ns').value, smtpPort: Number($('#nsp').value) }); closeModal(); toast('Cuenta añadida'); init(); } catch (x) { $('#nst').innerHTML = `<span class="err">${esc(x.message)}</span>`; busy(b, false); } };
     return;
   }
