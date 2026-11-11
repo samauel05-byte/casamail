@@ -64,3 +64,7 @@ Sube el número: el flujo usa `github.run_number` como `versionCode`, siempre cr
 ## IA generativa (Yerleny)
 - Genera **solo texto** (resúmenes, respuestas sugeridas, borradores, chat) con el motor que conecta el usuario (local o en la nube con su propia clave). Nunca envía correos sin confirmación.
 - **Informar de contenido**: cada respuesta de Yerleny lleva «Informar de un problema», que abre un correo preparado al soporte (versión 0.3.5 en adelante).
+
+## Enlaces públicos de la ficha
+- Política de privacidad: https://github.com/samauel05-byte/casamail/blob/main/docs/PRIVACIDAD.md
+- Términos del servicio (opcional): https://github.com/samauel05-byte/casamail/blob/main/docs/TERMINOS.md — página web estándar, pública y con HTTPS. Es un modelo: revísalo con un abogado.
