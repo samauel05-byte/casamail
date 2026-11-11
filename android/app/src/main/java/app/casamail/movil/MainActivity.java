@@ -6,6 +6,8 @@ import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
+import android.graphics.drawable.GradientDrawable;
+import android.widget.ImageView;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Build;
@@ -99,56 +101,75 @@ public class MainActivity extends Activity {
     }
 
     // ---------- pantalla de conexión ----------
+    private static final int AZUL = Color.rgb(10, 92, 230), MARINO = Color.rgb(13, 37, 80), GRIS = Color.rgb(96, 108, 130);
+
     private void showForm(String error, String presetUrl) {
         destroyWeb();
         root.removeAllViews();
+        root.setBackgroundColor(Color.rgb(238, 243, 249));
         ScrollView sv = new ScrollView(this);
         LinearLayout f = new LinearLayout(this);
         f.setOrientation(LinearLayout.VERTICAL);
-        f.setPadding(pad * 2, pad * 3, pad * 2, pad * 2);
+        f.setGravity(Gravity.CENTER_HORIZONTAL);
+        f.setPadding(pad * 2, pad * 2, pad * 2, pad * 2);
         sv.addView(f);
         root.addView(sv, new LinearLayout.LayoutParams(-1, -1));
 
-        TextView h = text("CasaMail", 30, true);
-        TextView p = text("Conecta con tu CasaMail (en tu PC o en tu servidor). Tu correo no se guarda en el móvil.", 15, false);
-        p.setPadding(0, dp(8), 0, dp(24));
+        // cabecera con el logo
+        ImageView logo = new ImageView(this);
+        logo.setImageResource(R.mipmap.ic_launcher);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(84), dp(84)); lp.topMargin = dp(16);
+        f.addView(logo, lp);
+        TextView h = text("CasaMail", 30, true); h.setGravity(Gravity.CENTER); h.setPadding(0, dp(12), 0, dp(4));
+        TextView p = text("Tu correo, en tu propio equipo.", 15, false); p.setGravity(Gravity.CENTER); p.setTextColor(GRIS); p.setPadding(0, 0, 0, dp(20));
         f.addView(h); f.addView(p);
 
-        EditText url = field("Dirección de tu CasaMail (https://…)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        // ver la app sin cuenta ni servidor
+        Button demoBtn = boton("Probar con datos de ejemplo", true);
+        demoBtn.setOnClickListener(v -> { demo = true; openWeb(DEMO_ORIGIN, null); });
+        f.addView(demoBtn, new LinearLayout.LayoutParams(-1, dp(52)));
+        TextView nota = text("Sin cuenta ni servidor: para verla y probarla.", 13, false); nota.setGravity(Gravity.CENTER); nota.setTextColor(GRIS); nota.setPadding(0, dp(6), 0, dp(22));
+        f.addView(nota);
+
+        // conectar con tu CasaMail
+        LinearLayout card = new LinearLayout(this);
+        card.setOrientation(LinearLayout.VERTICAL);
+        card.setPadding(dp(18), dp(16), dp(18), dp(18));
+        GradientDrawable fondo = new GradientDrawable(); fondo.setColor(Color.WHITE); fondo.setCornerRadius(dp(18)); fondo.setStroke(dp(1), Color.rgb(221, 229, 239));
+        card.setBackground(fondo);
+        TextView t2 = text("¿Ya tienes tu CasaMail? Conéctalo", 16, true); t2.setPadding(0, 0, 0, dp(4));
+        TextView t3 = text("Está en tu PC o en tu servidor. Tu correo no se guarda en el móvil.", 13, false); t3.setTextColor(GRIS); t3.setPadding(0, 0, 0, dp(8));
+        card.addView(t2); card.addView(t3);
+        EditText url = field("Dirección (https://…)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         if (presetUrl != null) url.setText(presetUrl);
-        EditText tok = field("Clave de acceso (o pega el enlace completo)", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        f.addView(url); f.addView(tok);
-
+        EditText tok = field("Clave de acceso o enlace completo", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        card.addView(url); card.addView(tok);
         TextView err = text(error == null ? "" : error, 14, false);
-        err.setTextColor(Color.rgb(176, 0, 32));
-        err.setPadding(0, dp(8), 0, dp(8));
-        f.addView(err);
-
-        Button go = new Button(this);
-        go.setText("Conectar");
-        go.setAllCaps(false);
+        err.setTextColor(Color.rgb(176, 0, 32)); err.setPadding(0, dp(8), 0, dp(4));
+        card.addView(err);
+        Button go = boton("Conectar", false);
         go.setOnClickListener(v -> {
             Conexion c = Conexion.de(url.getText().toString(), tok.getText().toString());
             if (c.error != null) { err.setText(c.error); return; }
             prefs.edit().putString("server", c.servidor).putString("token", c.token).apply();
             openWeb(c.servidor, c.token);
         });
-        f.addView(go);
+        card.addView(go, new LinearLayout.LayoutParams(-1, dp(48)));
+        f.addView(card, new LinearLayout.LayoutParams(-1, -2));
 
-        // Modo demostración: la app funciona con datos de ejemplo, sin cuenta ni servidor (para probarla y para la revisión de Google Play)
-        TextView or = text("¿Solo quieres verla?", 14, false);
-        or.setPadding(0, dp(20), 0, dp(4));
-        f.addView(or);
-        Button demoBtn = new Button(this);
-        demoBtn.setText("Probar con datos de ejemplo");
-        demoBtn.setAllCaps(false);
-        demoBtn.setOnClickListener(v -> { demo = true; openWeb(DEMO_ORIGIN, null); });
-        f.addView(demoBtn);
-
-        TextView help = text("¿Dónde encuentro esto? Al arrancar CasaMail en tu PC se imprime un enlace con la clave (…/?t=CLAVE). Pégalo aquí entero. La guía paso a paso está en github.com/samauel05-byte/casamail (docs/ANDROID.md).", 13, false);
-        help.setTextColor(Color.GRAY);
-        help.setPadding(0, dp(24), 0, 0);
+        TextView help = text("¿Dónde encuentro esto? Al arrancar CasaMail en tu PC se imprime un enlace con la clave (…/?t=CLAVE). Pégalo aquí entero. Guía paso a paso: github.com/samauel05-byte/casamail (docs/ANDROID.md).", 12, false);
+        help.setTextColor(GRIS); help.setPadding(dp(4), dp(18), dp(4), 0);
         f.addView(help);
+    }
+
+    /** Botón redondeado de la marca: relleno azul (principal) o con borde azul (secundario). */
+    private Button boton(String texto, boolean relleno) {
+        Button b = new Button(this);
+        b.setText(texto); b.setAllCaps(false); b.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16); b.setTypeface(Typeface.DEFAULT_BOLD);
+        GradientDrawable g = new GradientDrawable(); g.setCornerRadius(dp(26));
+        if (relleno) { g.setColor(AZUL); b.setTextColor(Color.WHITE); } else { g.setColor(Color.WHITE); g.setStroke(dp(2), AZUL); b.setTextColor(AZUL); }
+        b.setBackground(g); b.setStateListAnimator(null);
+        return b;
     }
 
     // ---------- navegador integrado ----------
@@ -258,11 +279,11 @@ public class MainActivity extends Activity {
         f.setPadding(pad * 2, pad * 2, pad * 2, pad * 2);
         TextView t = text(msg, 16, false);
         t.setGravity(Gravity.CENTER);
-        Button retry = new Button(this); retry.setText("Reintentar"); retry.setAllCaps(false);
+        Button retry = boton("Reintentar", true);
         retry.setOnClickListener(v -> { String tk = prefs.getString("token", null); if (tk != null) openWeb(server, tk); else showForm(null, server); });
-        Button change = new Button(this); change.setText("Cambiar servidor"); change.setAllCaps(false);
+        Button change = boton("Cambiar servidor", false);
         change.setOnClickListener(v -> showForm(null, server));
-        f.addView(t); f.addView(retry); f.addView(change);
+        f.addView(t); LinearLayout.LayoutParams bl = new LinearLayout.LayoutParams(-1, dp(48)); bl.topMargin = dp(16); f.addView(retry, bl); LinearLayout.LayoutParams bl2 = new LinearLayout.LayoutParams(-1, dp(48)); bl2.topMargin = dp(10); f.addView(change, bl2);
         root.addView(f, new LinearLayout.LayoutParams(-1, -1));
     }
 
@@ -293,7 +314,7 @@ public class MainActivity extends Activity {
     }
     private EditText field(String hint, int type) {
         EditText e = new EditText(this); e.setHint(hint); e.setInputType(type); e.setSingleLine(true);
-        e.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+        e.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(48))); e.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
         return e;
     }
 }

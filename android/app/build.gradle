@@ -2,7 +2,7 @@ plugins { id("com.android.application") }
 
 // Versión: la fija el flujo de GitHub (ANDROID_VERSION_CODE) o, en local, 1. Cada subida a Google Play necesita un código MAYOR que el anterior.
 def vcode = (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInteger()
-def vname = System.getenv("ANDROID_VERSION_NAME") ?: "0.3.5"
+def vname = System.getenv("ANDROID_VERSION_NAME") ?: "0.3.6"
 
 // La interfaz web (../public) se empaqueta dentro de la app: el modo demostración la muestra con datos de ejemplo, sin servidor.
 def demoAssets = layout.buildDirectory.dir("generated/demo-assets")
