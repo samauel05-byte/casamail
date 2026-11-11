@@ -9,6 +9,7 @@ process.env.CASAMAIL_AI_DOWN_MS = "0"; // (los motores caídos no se aparcan: as
 const { startImap, startSmtp, startFakeAi, sentMails, startMockOAuth, oauth: mock, lastSystem, fakeStats } = await import("./servers.js");
 const store = await import("../src/store.js");
 const mail = await import("../src/mail.js");
+const sigsMod = await import("../src/signature.js");
 const ai = await import("../src/ai.js");
 const outbox = await import("../src/outbox.js");
 const archive = await import("../src/archive.js");
@@ -578,6 +579,16 @@ await t("las tareas largas (descargar un buzón) usan su propia conexión y no c
   await t("quitar una cuenta cierra su conexión", async () => { await reset(); await mail.listMessages(accP, "PerfBox", { limit: 1 }); eq(ps.open.size, 1); mail.dropConnection("perf"); await new Promise((r) => setTimeout(r, 200)); eq(ps.open.size, 0); });
   mail.closeConnections(); proxyP.close();
 }
+
+console.log("\nFirma");
+await t("firma gestionada por el servidor: CasaMail no añade firma (no duplica), aunque haya una local", () => {
+  sigsMod.save("t", { items: [{ id: "f1", name: "Mía", html: "<div>Firma local</div>", text: "Firma local" }], newDefault: "f1", replyDefault: "f1" });
+  ok(sigsMod.pick("t", undefined, false)?.html.includes("Firma local"), "sin el ajuste usa la firma local");
+  sigsMod.save("t", { items: [{ id: "f1", name: "Mía", html: "<div>Firma local</div>", text: "Firma local" }], newDefault: "f1", replyDefault: "f1", serverManaged: true });
+  eq(sigsMod.pick("t", undefined, false), null, "con 'la añade el servidor' CasaMail no añade firma");
+  eq(sigsMod.pick("t", undefined, true), null, "tampoco en respuestas");
+  sigsMod.save("t", { items: [] }); // restaurar
+});
 
 console.log("\nCorreos del asistente: tu firma, y nunca decir que envió algo");
 store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });

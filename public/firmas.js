@@ -48,10 +48,13 @@ async function tabFirma(c) {
   const draw = () => {
     c.innerHTML = `<h3>Firmas</h3><p class="lead">Crea firmas con tu logo, como en Outlook. Elige una para los mensajes nuevos y otra (por ejemplo, más corta) para las respuestas. Al redactar puedes cambiarla.</p>
       ${accts.map(a => { const set = sigs[a.id] || { items: [], newDefault: '', replyDefault: '' };
-        return `<div class="sigcard"><div class="row" style="margin:0 0 8px"><b>${esc(a.email)}</b><span class="grow"></span><button class="btn btn-sm" data-imp="${esc(a.id)}">${I('download', 'sm')} Importar de un correo enviado</button><button class="btn btn-primary btn-sm" data-new="${esc(a.id)}">${I('plus', 'sm')} Nueva firma</button></div>
-          ${set.items.length ? set.items.map(x => `<div class="sigitem"><div class="sigthumb">${x.html}</div><div class="grow"><b>${esc(x.name)}</b>
+        return `<div class="sigcard"><div class="row" style="margin:0 0 8px"><b>${esc(a.email)}</b><span class="grow"></span>${set.serverManaged ? '' : `<button class="btn btn-sm" data-imp="${esc(a.id)}">${I('download', 'sm')} Importar de un correo enviado</button><button class="btn btn-primary btn-sm" data-new="${esc(a.id)}">${I('plus', 'sm')} Nueva firma</button>`}</div>
+          <label class="chip" style="margin:0 0 8px;display:inline-flex"><input type="checkbox" data-srv="${esc(a.id)}" ${set.serverManaged ? 'checked' : ''}> Mi servidor de correo ya añade la firma (no añadir aquí)</label>
+          ${set.serverManaged
+            ? `<div class="note">${I('check')}<span>CasaMail <b>no añadirá firma</b> en esta cuenta: la pone tu servidor de correo, así no sale duplicada. En tu carpeta <b>Enviados</b> el correo se verá sin la firma, pero el destinatario sí la recibe.</span></div>`
+            : (set.items.length ? set.items.map(x => `<div class="sigitem"><div class="sigthumb">${x.html}</div><div class="grow"><b>${esc(x.name)}</b>
             <div class="sigsel"><label class="chip"><input type="radio" name="n-${esc(a.id)}" data-nd="${esc(a.id)}|${esc(x.id)}" ${set.newDefault === x.id ? 'checked' : ''}>Mensajes nuevos</label><label class="chip"><input type="radio" name="r-${esc(a.id)}" data-rd="${esc(a.id)}|${esc(x.id)}" ${set.replyDefault === x.id ? 'checked' : ''}>Respuestas</label></div></div>
-            <button class="btn btn-sm" data-edit="${esc(a.id)}|${esc(x.id)}">Editar</button><button class="iconbtn" data-del="${esc(a.id)}|${esc(x.id)}" title="Borrar" aria-label="Borrar">${I('trash')}</button></div>`).join('') : '<p class="mut" style="margin:6px 0">Sin firma. Crea una o impórtala de un correo que ya enviaste (con tu logo).</p>'}</div>`; }).join('') || '<div class="note">Añade una cuenta primero.</div>'}`;
+            <button class="btn btn-sm" data-edit="${esc(a.id)}|${esc(x.id)}">Editar</button><button class="iconbtn" data-del="${esc(a.id)}|${esc(x.id)}" title="Borrar" aria-label="Borrar">${I('trash')}</button></div>`).join('') : '<p class="mut" style="margin:6px 0">Sin firma. Crea una o impórtala de un correo que ya enviaste (con tu logo).</p>')}</div>`; }).join('') || '<div class="note">Añade una cuenta primero.</div>'}`;
     const set0 = a => (sigs[a] ||= { items: [], newDefault: '', replyDefault: '' });
     $$('[data-new]', c).forEach(b => b.onclick = () => sigEditor(b.dataset.new, null, async v => { const a = b.dataset.new, set = set0(a); set.items.push({ id: '', ...v }); await put(a, set); settings('firma'); }));
     $$('[data-edit]', c).forEach(b => b.onclick = () => { const [a, id] = b.dataset.edit.split('|'), set = set0(a), it = set.items.find(x => x.id === id); sigEditor(a, it, async v => { Object.assign(it, v); await put(a, set); settings('firma'); }); });
@@ -59,6 +62,7 @@ async function tabFirma(c) {
     $$('[data-nd]', c).forEach(b => b.onchange = async () => { const [a, id] = b.dataset.nd.split('|'), set = set0(a); set.newDefault = id; await put(a, set); toast('Firma para mensajes nuevos guardada'); });
     $$('[data-rd]', c).forEach(b => b.onchange = async () => { const [a, id] = b.dataset.rd.split('|'), set = set0(a); set.replyDefault = id; await put(a, set); toast('Firma para respuestas guardada'); });
     $$('[data-imp]', c).forEach(b => b.onclick = () => sigImport(b.dataset.imp, b));
+    $$('[data-srv]', c).forEach(b => b.onchange = async () => { const a = b.dataset.srv, set = set0(a); set.serverManaged = b.checked; await put(a, set); toast(b.checked ? 'CasaMail no añadirá firma en esta cuenta (la pone tu servidor)' : 'Firma gestionada por CasaMail'); draw(); });
   };
   draw();
 }
