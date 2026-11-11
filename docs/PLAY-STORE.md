@@ -19,27 +19,29 @@ Lo que ya está listo en el repositorio y lo que tienes que hacer tú (hay pasos
 3. Ejecuta el flujo **Android** (Actions → Android → Run workflow) y descarga el **.aab** firmado.
 4. En Play Console: *Crear app* → Español → App → Gratis. Sube el `.aab` a **Pruebas internas** primero.
 5. Si tu cuenta es **personal y nueva**: Google exige una **prueba cerrada con al menos 12 testers durante 14 días seguidos** antes de poder publicar en producción.
-6. **Acceso para el revisor**: la app incluye un **modo demostración** (botón *Probar con datos de ejemplo* en la primera pantalla): funciona sin cuenta ni servidor, con correos, calendario y avisos de ejemplo. En *Contenido de la app → Acceso a la aplicación* indica: «La app no exige inicio de sesión para probarse: en la pantalla inicial pulse «Probar con datos de ejemplo». Para usarla con correo real hace falta un servidor CasaMail propio (ver la descripción).» Así el revisor puede probarla sin ninguna clave.
+6. **Acceso para el revisor**: la app incluye un **modo demostración** (botón *Probar con datos de ejemplo* en la primera pantalla): funciona sin cuenta ni servidor, con correos, calendario y avisos de ejemplo. En *Contenido de la app → Acceso a la aplicación* indica: «La app no exige inicio de sesión para probarse: en la pantalla inicial pulse «Probar con datos de ejemplo». Para usarla con correo real basta con iniciar sesión con cualquier cuenta IMAP/SMTP (Gmail, Outlook, etc.); no hace falta ningún servidor aparte.» Así el revisor puede probarla sin ninguna clave.
 
 ## Textos de la ficha (Español)
 
 **Nombre** (30 máx.): `CasaMail`
 
 **Descripción breve** (80 máx.):
-`Tu correo propio, privado y con IA, conectado a tu CasaMail.`
+`Correo privado en tu móvil: IMAP/SMTP, firmas y avisos. Sin anuncios ni rastreo.`
 
 **Descripción completa:**
 ```
-CasaMail es un cliente de correo propio: tu correo vive en tu equipo, no en la nube de nadie. Esta app te conecta desde el móvil a TU CasaMail (en tu PC o en tu servidor) de forma segura (solo HTTPS).
+CasaMail es un cliente de correo privado que funciona solo en tu móvil: no necesitas ningún ordenador ni servidor. Inicia sesión con tu correo y empieza a usarlo.
 
-• Todas tus cuentas en un solo lugar: IMAP/SMTP, Gmail y Outlook (OAuth).
-• Yerleny, la IA de CasaMail: resume mensajes, sugiere respuestas, redacta borradores y te prepara un resumen del día. Nunca envía nada sin que tú lo confirmes.
-• Avisos: cada correo nuevo con un resumen de lo que dice, reuniones detectadas para agendar y recordatorios antes de cada una.
+• Funciona con tu correo de siempre (IMAP/SMTP): Gmail, Outlook, Yahoo, iCloud, Zoho o el de tu propio dominio. Gmail, Yahoo e iCloud se conectan con una contraseña de aplicación (la app te muestra dónde crearla).
+• Todas tus cuentas en una sola bandeja unificada.
+• Firmas con tu logo, respuestas con el mensaje citado y búsqueda en el correo.
+• Avisos de correo nuevo aunque tengas la app cerrada.
 • Retira un envío durante 10 minutos antes de que salga.
-• Archivo local sin límite de capacidad: importa y exporta PST y MBOX.
-• Privacidad: sin publicidad, sin rastreadores, sin cuentas propias. La app no guarda tu correo en el teléfono.
+• Privacidad de verdad: sin publicidad, sin rastreadores y sin cuentas propias. Tus contraseñas se guardan cifradas solo en tu móvil y la app no envía nada a sus creadores.
 
-IMPORTANTE: necesitas tener CasaMail instalado y accesible por HTTPS (por ejemplo con Tailscale). Guía: https://github.com/samauel05-byte/casamail/blob/main/docs/ANDROID.md
+¿Tienes tu propio servidor CasaMail en tu PC? También puedes conectarlo desde «Usar mi propio servidor CasaMail».
+
+Desarrollado por CasaLabs — https://www.casalabs.com.do/
 ```
 
 **Categoría:** Productividad · **Correo de contacto:** el tuyo · **Política de privacidad:** `https://github.com/samauel05-byte/casamail/blob/main/docs/PRIVACIDAD.md`
@@ -51,9 +53,10 @@ IMPORTANTE: necesitas tener CasaMail instalado y accesible por HTTPS (por ejempl
 No usa alarmas exactas, servicios en primer plano, ubicación, contactos ni almacenamiento.
 
 ## Formulario "Seguridad de los datos" (respuestas sugeridas)
-- ¿Recopila o comparte datos del usuario? **No** (la app no envía datos al desarrollador ni a terceros; solo se comunica con el servidor que el propio usuario configura).
-- Cifrado en tránsito: **Sí** (HTTPS obligatorio).
-- ¿Puede el usuario pedir que se borren sus datos? **Sí** (los datos están en su servidor; borrar los datos de la app elimina la configuración).
+- ¿Recopila o comparte datos del usuario? **No** (la app no envía datos al desarrollador ni a terceros; solo se comunica con el servidor de correo del propio usuario —su proveedor IMAP/SMTP, p. ej. Gmail— o con su propio servidor CasaMail).
+- Cifrado en tránsito: **Sí** (IMAP/SMTP sobre SSL/TLS; con servidor propio, solo HTTPS).
+- ¿Dónde se guardan las contraseñas? En el **propio móvil, cifradas** con el Android Keystore; no salen del dispositivo salvo para iniciar sesión en el servidor de correo del usuario.
+- ¿Puede el usuario pedir que se borren sus datos? **Sí** (borrar los datos de la app, o quitar la cuenta, elimina las credenciales y la configuración del móvil).
 - Anuncios: **No**. Compras: **No**.
 - Clasificación de contenido: cuestionario IARC como "utilidad/comunicación"; sin contenido sensible → suele salir **PEGI 3 / Para todos**.
 - Público objetivo: **18+** (evita las normas de apps infantiles).
