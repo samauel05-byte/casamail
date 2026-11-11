@@ -435,7 +435,7 @@ $('#send').onclick = () => doSend(false);
 $('#sendnow').onclick = () => { if (confirm('Se enviará ahora mismo y ya no podrás retirarlo. ¿Continuar?')) doSend(true); };
 
 /* ---------- IA ---------- */
-function needAi() { if (S.aiOk) return true; if (window.casaNativo) { toast('Yerleny (la IA) llegará pronto a la versión independiente de la app.'); return false; } toast('Yerleny necesita un modelo de IA para pensar. Conéctalo en Ajustes (puede ser gratis y local con Ollama).', { action: 'Conectar', onAction: () => settings('ia'), ms: 12000 }); return false; }
+function needAi() { if (S.aiOk) return true; if (window.casaNativo) { toast('Yerleny necesita una clave de IA gratuita (2 min).', { action: 'Conectar', onAction: () => nativoIA(), ms: 12000 }); return false; } toast('Yerleny necesita un modelo de IA para pensar. Conéctalo en Ajustes (puede ser gratis y local con Ollama).', { action: 'Conectar', onAction: () => settings('ia'), ms: 12000 }); return false; }
 const SUGG = ['Dame mi resumen del día', 'Resume mis correos sin leer', '¿Qué facturas me llegaron?', 'Busca lo último de mi jefe', 'Prepara una respuesta amable al último mensaje'];
 function drawerOpen() { warmAi(); $('#drawer').hidden = false; if (!$('#chat').children.length) chatIntro(); $('#ci').focus(); }
 function chatIntro() {

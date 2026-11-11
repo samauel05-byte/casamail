@@ -35,6 +35,7 @@ CasaMail es un cliente de correo privado que funciona solo en tu móvil: no nece
 • Funciona con tu correo de siempre (IMAP/SMTP): Gmail, Outlook, Yahoo, iCloud, Zoho o el de tu propio dominio. Gmail, Yahoo e iCloud se conectan con una contraseña de aplicación (la app te muestra dónde crearla).
 • Todas tus cuentas en una sola bandeja unificada.
 • Firmas con tu logo, respuestas con el mensaje citado y búsqueda en el correo.
+• Yerleny, la IA: resume correos, sugiere respuestas y redacta por ti. Es opcional y usa el nivel gratuito de Gemini (pones tu clave gratis en Ajustes).
 • Avisos de correo nuevo aunque tengas la app cerrada.
 • Retira un envío durante 10 minutos antes de que salga.
 • Privacidad de verdad: sin publicidad, sin rastreadores y sin cuentas propias. Tus contraseñas se guardan cifradas solo en tu móvil y la app no envía nada a sus creadores.
@@ -55,6 +56,7 @@ No usa alarmas exactas, servicios en primer plano, ubicación, contactos ni alma
 ## Formulario "Seguridad de los datos" (respuestas sugeridas)
 - ¿Recopila o comparte datos del usuario? **No** (la app no envía datos al desarrollador ni a terceros; solo se comunica con el servidor de correo del propio usuario —su proveedor IMAP/SMTP, p. ej. Gmail— o con su propio servidor CasaMail).
 - Cifrado en tránsito: **Sí** (IMAP/SMTP sobre SSL/TLS; con servidor propio, solo HTTPS).
+- IA (Yerleny, opcional y apagada por defecto): si el usuario la activa con su clave, el texto que pida resumir/responder se envía al proveedor de IA que configuró (Google Gemini) para procesarlo; no se envía a los creadores de la app.
 - ¿Dónde se guardan las contraseñas? En el **propio móvil, cifradas** con el Android Keystore; no salen del dispositivo salvo para iniciar sesión en el servidor de correo del usuario.
 - ¿Puede el usuario pedir que se borren sus datos? **Sí** (borrar los datos de la app, o quitar la cuenta, elimina las credenciales y la configuración del móvil).
 - Anuncios: **No**. Compras: **No**.

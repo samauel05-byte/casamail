@@ -29,8 +29,8 @@ public final class Api {
         Respuesta(int estado, String json, byte[] datos, String tipo, String nombre) { this.estado = estado; this.json = json; this.datos = datos; this.tipo = tipo; this.nombre = nombre; }
     }
 
-    private final Almacen alm; private final Correo correo = new Correo(); private final String version;
-    public Api(Almacen alm, String version) { this.alm = alm; this.version = version; }
+    private final Almacen alm; private final Correo correo = new Correo(); private final String version; private final IA ia;
+    public Api(Almacen alm, String version) { this.alm = alm; this.version = version; this.ia = new IA(alm); }
     public Correo correo() { return correo; }
 
     // ---------- cuentas guardadas ----------
@@ -85,9 +85,15 @@ public final class Api {
         if (r.equals("/api/send-delay")) { if (!m.equals("GET")) alm.guardar("retraso", String.valueOf(Math.max(0, Math.min(10, b.optInt("minutes", 10))))); return ok(new JSONObject().put("minutes", retraso())); }
         if (r.equals("/api/yerleny")) return ok(new JSONObject().put("userName", "").put("notes", new JSONArray()));
         if (r.equals("/api/archive/stats")) return ok("{\"messages\":0}");
-        if (r.equals("/api/ai/config")) return ok("null");
-        if (r.equals("/api/ai/engines")) return ok("[]");
-        if (r.startsWith("/api/ai/")) { if (m.equals("GET")) return ok("{}"); return new Respuesta(500, "{\"error\":\"Yerleny (la IA) llegará pronto a la versión independiente de la app.\"}"); }
+        if (r.equals("/api/ai/config")) {
+            if (m.equals("POST")) { ia.guardar(b.optString("apiKey", b.optString("clave", "")), b.optString("model", "")); return ok(estadoIA()); }
+            return ia.configurada() ? ok(estadoIA()) : ok("null");
+        }
+        if (r.equals("/api/ai/engines")) {
+            if (m.equals("POST")) return ok(new JSONArray());   // la versión independiente no usa "motores"; la clave se guarda en /api/ai/config
+            return ok(ia.configurada() ? new JSONArray().put(estadoIA()) : new JSONArray());
+        }
+        if (r.startsWith("/api/ai/")) return ai(m, r, q, b);
         if (r.equals("/api/update")) return ok(new JSONObject().put("info", JSONObject.NULL).put("version", version));
         if (r.equals("/api/contacts")) return ok("[]");
         if (r.equals("/api/changes")) { dormir(q.get("wait")); return ok("{\"seq\":0,\"accounts\":[]}"); }
@@ -261,6 +267,28 @@ public final class Api {
             } catch (Exception ignored) { /* sin red o contraseña caducada: se reintenta en la próxima */ }
         }
         return out;
+    }
+
+    // ---------- Yerleny (IA en la nube, nivel gratuito) ----------
+    private JSONObject estadoIA() throws JSONException { return new JSONObject().put("provider", "gemini").put("model", ia.modelo()).put("ok", true).put("free", true); }
+
+    private Respuesta ai(String m, String r, Map<String, String> q, JSONObject b) throws Exception {
+        try {
+            if (r.equals("/api/ai/warmup")) return ok("{\"ok\":true}");
+            if (r.equals("/api/ai/test")) return ok(new JSONObject().put("reply", ia.probar()));
+            if (r.equals("/api/ai/rewrite")) return ok(new JSONObject().put("text", ia.reescribir(b.optString("text"), b.optString("mode", ""))));
+            if (r.equals("/api/ai/agent")) return ok(ia.chat(b.optJSONArray("history"), b.optString("text")));
+            if (r.equals("/api/ai/summarize")) { JSONObject msg = correo.mensaje(cuenta(q), b.optString("folder", "INBOX"), b.getLong("uid"), false); return ok(new JSONObject().put("summary", ia.resumir(msg))); }
+            if (r.equals("/api/ai/replies")) { JSONObject msg = correo.mensaje(cuenta(q), b.optString("folder", "INBOX"), b.getLong("uid"), false); return ok(new JSONObject().put("options", ia.respuestas(msg))); }
+            if (r.equals("/api/ai/draft")) {
+                JSONObject original = b.has("uid") && !b.isNull("uid") ? correo.mensaje(cuenta(q), b.optString("folder", "INBOX"), b.getLong("uid"), false) : null;
+                return ok(ia.borrador(b.optString("instruction"), b.optString("tone", ""), original));
+            }
+            if (m.equals("GET")) return ok("{}");    // presets, local, models… no aplican en la versión independiente
+            return ok("{}");
+        } catch (IA.ErrorIA e) {
+            return new Respuesta(500, new JSONObject().put("error", e.getMessage()).toString());
+        }
     }
 
     // ---------- calendario sencillo (guardado en el teléfono) ----------
