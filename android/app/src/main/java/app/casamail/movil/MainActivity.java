@@ -219,10 +219,12 @@ public class MainActivity extends Activity {
     // ---------- navegador integrado ----------
     private void openWeb(String server, String token) {
         if (!demo) {
-            Notifs.canales(this);
-            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
-                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 21);   // Android 13+: hay que pedir permiso para avisar
-            AvisosJob.programar(this);
+            try {
+                Notifs.canales(this);
+                if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                    requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 21);   // Android 13+: hay que pedir permiso para avisar
+                AvisosJob.programar(this);
+            } catch (Throwable t) { /* los avisos son opcionales: si el sistema los rechaza, la app sigue funcionando */ }
         }
         root.removeAllViews();
         web = new WebView(this);
