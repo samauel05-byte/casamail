@@ -19,7 +19,7 @@ Lo que ya está listo en el repositorio y lo que tienes que hacer tú (hay pasos
 3. Ejecuta el flujo **Android** (Actions → Android → Run workflow) y descarga el **.aab** firmado.
 4. En Play Console: *Crear app* → Español → App → Gratis. Sube el `.aab` a **Pruebas internas** primero.
 5. Si tu cuenta es **personal y nueva**: Google exige una **prueba cerrada con al menos 12 testers durante 14 días seguidos** antes de poder publicar en producción.
-6. **Acceso para el revisor** (importante): la app necesita un servidor. En *Contenido de la app → Acceso a la aplicación* indica una dirección HTTPS y una clave **de demostración** de un CasaMail tuyo con datos de ejemplo, accesible mientras dure la revisión. Sin esto, Google la rechazará por "no se puede probar".
+6. **Acceso para el revisor**: la app incluye un **modo demostración** (botón *Probar con datos de ejemplo* en la primera pantalla): funciona sin cuenta ni servidor, con correos, calendario y avisos de ejemplo. En *Contenido de la app → Acceso a la aplicación* indica: «La app no exige inicio de sesión para probarse: en la pantalla inicial pulse «Probar con datos de ejemplo». Para usarla con correo real hace falta un servidor CasaMail propio (ver la descripción).» Así el revisor puede probarla sin ninguna clave.
 
 ## Textos de la ficha (Español)
 
