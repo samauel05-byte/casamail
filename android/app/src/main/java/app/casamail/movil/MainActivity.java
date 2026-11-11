@@ -224,6 +224,7 @@ public class MainActivity extends Activity {
                 if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
                     requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 21);   // Android 13+: hay que pedir permiso para avisar
                 AvisosJob.programar(this);
+                if (nativo) VigilanteCorreo.iniciar(this);   // app independiente: vigilancia en primer plano para avisar casi al instante
             } catch (Throwable t) { /* los avisos son opcionales: si el sistema los rechaza, la app sigue funcionando */ }
         }
         root.removeAllViews();
