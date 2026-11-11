@@ -401,3 +401,7 @@ main.welcome #view{display:flex}  /* en el móvil la vista está oculta hasta ab
 
 /* lista sin límite: pie con "Cargar más" */
 .loadmore{padding:16px;text-align:center}.loadmore.end{color:var(--ink-3);font-size:13px}
+
+/* modo demostración */
+#demobar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:#0a3fbd;color:#fff;text-align:center;font-size:12.5px;padding:5px 10px;padding-bottom:calc(5px + env(safe-area-inset-bottom))}
+#demobar a{color:#fff;font-weight:700;margin-left:8px;text-decoration:underline}
