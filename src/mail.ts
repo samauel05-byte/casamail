@@ -35,8 +35,11 @@ async function smtp(acc: Account) {
 // y vuelta al servidor: con 100 ms de latencia son más de un segundo POR CLIC. Se mantiene abierta una conexión por cuenta;
 // se cierra tras unos minutos sin uso, y si el servidor la cerró por inactividad se reconecta sola.
 const IDLE_MS = Number(process.env.CASAMAIL_IMAP_IDLE_MS ?? 4 * 60_000);
-interface Pooled { client: ImapFlow; key: string; timer?: NodeJS.Timeout }
-const pool = new Map<string, Pooled>(), connecting = new Map<string, Promise<Pooled>>();
+interface Pooled { client: ImapFlow; key: string; busy: boolean; timer?: NodeJS.Timeout }
+// Varias conexiones IMAP por cuenta (pool): abrir un correo no espera detrás del conteo de carpetas u otra operación lenta.
+const pools = new Map<string, Pooled[]>();
+const waiters = new Map<string, (() => void)[]>();
+const MAX_CONN = Math.max(1, Number(process.env.CASAMAIL_IMAP_MAX_CONN ?? 3));
 export const fingerprint = (a: Account) => [a.imap.host, a.imap.port, a.imap.secure, a.user, a.pass, a.oauth?.refreshToken ?? ""].join("|"); // si cambian las credenciales, se reconecta
 
 export async function openImap(acc: Account): Promise<ImapFlow> {
@@ -46,39 +49,59 @@ export async function openImap(acc: Account): Promise<ImapFlow> {
   catch (e) { try { c.close(); } catch { /* ya cerrada */ } throw e; } // si falla la autenticación la librería deja el socket abierto: se cierra para no acumular conexiones
   return c;
 }
-function touch(id: string, e: Pooled) { clearTimeout(e.timer); e.timer = setTimeout(() => dropConnection(id), IDLE_MS); e.timer.unref?.(); }
-/** Cierra la conexión reutilizada de una cuenta (p. ej. al quitarla). */
+/** Programa el cierre por inactividad de una conexión libre. */
+function idleTimer(accId: string, e: Pooled) {
+  clearTimeout(e.timer);
+  e.timer = setTimeout(() => { if (!e.busy) { removeConn(accId, e); e.client?.logout().catch(() => e.client?.close()); } }, IDLE_MS);
+  e.timer.unref?.();
+}
+function wake(accId: string) { const w = waiters.get(accId); if (w && w.length) w.shift()!(); }
+function removeConn(accId: string, e: Pooled) {
+  const arr = pools.get(accId); if (!arr) return;
+  const i = arr.indexOf(e); if (i >= 0) arr.splice(i, 1);
+  clearTimeout(e.timer); wake(accId); // queda un hueco libre: avisa a quien espera
+}
+/** Cierra todas las conexiones reutilizadas de una cuenta (p. ej. al quitarla o cambiar credenciales). */
 export function dropConnection(id: string) {
-  const e = pool.get(id); if (!e) return;
-  pool.delete(id); clearTimeout(e.timer); e.client.logout().catch(() => e.client.close());
+  const arr = pools.get(id); if (!arr) return;
+  pools.delete(id);
+  for (const e of arr) { clearTimeout(e.timer); e.client?.logout().catch(() => e.client?.close()); }
+  const w = waiters.get(id); if (w) { for (const r of w) r(); waiters.delete(id); }
 }
-export function closeConnections() { for (const id of [...pool.keys()]) dropConnection(id); }
-async function pooled(acc: Account): Promise<Pooled> {
-  const key = fingerprint(acc), cur = pool.get(acc.id);
-  if (cur && cur.key === key && cur.client.usable) { touch(acc.id, cur); return cur; }
-  if (cur) dropConnection(acc.id);
-  let p = connecting.get(acc.id);
-  if (!p) {
-    p = (async () => {
-      const e: Pooled = { client: await openImap(acc), key };
-      e.client.on("close", () => { if (pool.get(acc.id) === e) pool.delete(acc.id); });
-      pool.set(acc.id, e); return e;
-    })().finally(() => connecting.delete(acc.id));
-    connecting.set(acc.id, p);
+export function closeConnections() { for (const id of [...pools.keys()]) dropConnection(id); }
+
+/** Toma una conexión libre del pool (crea una nueva hasta el máximo; si están todas ocupadas, espera a que se libere). Hay que soltarla con release(). */
+async function acquire(acc: Account): Promise<Pooled> {
+  const key = fingerprint(acc);
+  let arr = pools.get(acc.id);
+  if (arr && arr.length && arr[0].key !== key) { dropConnection(acc.id); arr = undefined; } // cambiaron las credenciales
+  if (!arr) { arr = []; pools.set(acc.id, arr); }
+  const free = arr.find((e) => !e.busy && e.client?.usable);
+  if (free) { free.busy = true; clearTimeout(free.timer); return free; }
+  if (arr.length < MAX_CONN) {
+    const e = { key, busy: true } as Pooled;
+    arr.push(e);
+    try { e.client = await openImap(acc); }
+    catch (err) { removeConn(acc.id, e); throw err; }
+    e.client.on("close", () => removeConn(acc.id, e));
+    return e;
   }
-  const e = await p; touch(acc.id, e); return e;
+  await new Promise<void>((resolve) => { const w = waiters.get(acc.id) ?? []; w.push(resolve); waiters.set(acc.id, w); });
+  return acquire(acc);
 }
+/** Devuelve una conexión al pool y despierta a quien esté esperando. */
+function release(accId: string, e: Pooled) { e.busy = false; idleTimer(accId, e); wake(accId); }
 const connDead = (err: unknown) => { const x = err as { code?: string; message?: string }; return ["NoConnection", "ECONNRESET", "EPIPE", "ETIMEDOUT"].includes(x?.code ?? "") || /connection (not available|closed)|socket (closed|hang up)/i.test(x?.message ?? ""); };
 
 async function withImap<T>(acc: Account, fn: (c: ImapFlow) => Promise<T>, o: { fresh?: boolean } = {}): Promise<T> {
   if (o.fresh) { const c = await openImap(acc); try { return await fn(c); } finally { await c.logout().catch(() => c.close()); } } // tareas largas y pruebas: conexión propia
   for (let attempt = 0; ; attempt++) {
-    const e = await pooled(acc);
-    try { const r = await fn(e.client); touch(acc.id, e); return r; }
+    const e = await acquire(acc);
+    try { const r = await fn(e.client); release(acc.id, e); return r; }
     catch (err) {
-      // la conexión estaba caída (el servidor la cerró por inactividad): se reconecta y se repite UNA vez
-      if (attempt === 0 && connDead(err) && !e.client.usable) { dropConnection(acc.id); continue; }
-      throw err;
+      // la conexión estaba caída (el servidor la cerró por inactividad): se descarta y se reintenta con otra, UNA vez
+      if (attempt === 0 && connDead(err) && !e.client?.usable) { removeConn(acc.id, e); try { e.client?.close(); } catch { /* ya cerrada */ } continue; }
+      release(acc.id, e); throw err;
     }
   }
 }

@@ -507,7 +507,7 @@ if (LLM && fs.existsSync(LLM)) {
 limited.close(); badKey.close(); modelsSrv.close();
 store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });
 
-console.log("\nRendimiento: una conexión reutilizada por cuenta");
+console.log("\nRendimiento: pool de conexiones por cuenta (secuencial reutiliza una; en paralelo hasta 3)");
 {
   const net = await import("node:net");
   const ps = { conns: 0, up: 0, open: new Set<import("node:net").Socket>() };
@@ -528,10 +528,11 @@ console.log("\nRendimiento: una conexión reutilizada por cuenta");
     await mail.setFlags(accP, "PerfBox", l.messages[0].uid, { starred: true }); await mail.listFolders(accP); await mail.listMessages(accP, "PerfBox", { limit: 5 });
     eq(ps.conns, 1, "antes eran 8: una por acción");
   });
-  await t("10 acciones simultáneas comparten la conexión y todas devuelven lo correcto", async () => {
+  await t("10 acciones simultáneas usan varias conexiones del pool (en paralelo), sin mezclar respuestas", async () => {
     await reset(); const l = await mail.listMessages(accP, "PerfBox", { limit: 7 });
     const all = await Promise.all(l.messages.concat(l.messages).slice(0, 10).map((m) => mail.getMessage(accP, "PerfBox", m.uid, false)));
-    ok(all.every((m, i) => m.subject === l.messages[i % 7].subject), "cada respuesta debe corresponder a su mensaje"); eq(ps.conns, 1);
+    ok(all.every((m, i) => m.subject === l.messages[i % 7].subject), "cada respuesta debe corresponder a su mensaje");
+    ok(ps.conns >= 2 && ps.conns <= 3, `en paralelo abre hasta 3 conexiones del pool (no una sola que lo serialice); abrió ${ps.conns}`);
   });
   await t("la bandeja pide solo la página visible: orden correcto, sin solapes y total exacto", async () => {
     await reset(); const p1 = await mail.listMessages(accP, "PerfBox", { limit: 3, offset: 0 }), p2 = await mail.listMessages(accP, "PerfBox", { limit: 3, offset: 3 }), p3 = await mail.listMessages(accP, "PerfBox", { limit: 3, offset: 6 }), p4 = await mail.listMessages(accP, "PerfBox", { limit: 3, offset: 99 });
