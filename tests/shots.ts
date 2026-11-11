@@ -61,5 +61,14 @@ await pg.keyboard.press("Escape");
 const m = await b.newContext({ viewport: { width: 390, height: 800 }, deviceScaleFactor: 2, colorScheme: "light" });
 const mp = await m.newPage(); await mp.goto("http://127.0.0.1:8078/?t=tok"); await mp.waitForSelector(".m"); await mp.waitForTimeout(400); await mp.screenshot({ path: `${OUT}/9-mobile-list.png` });
 await mp.locator(".m").first().click(); await mp.waitForSelector(".vsub"); await mp.waitForTimeout(300); await mp.screenshot({ path: `${OUT}/10-mobile-message.png` });
+// Capturas para Google Play (teléfono, 1080×1920)
+await ctx.request.delete("http://127.0.0.1:8078/api/accounts/trabajo"); // una sola cuenta: sin mensajes duplicados en las capturas
+const ph = await b.newContext({ viewport: { width: 360, height: 640 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, colorScheme: "light" });
+const pp = await ph.newPage(); pp.setDefaultTimeout(10000); await pp.goto("http://127.0.0.1:8078/?t=tok"); await pp.waitForSelector(".m"); await pp.waitForTimeout(500); await pp.screenshot({ path: `${OUT}/play-1-bandeja.png` });
+await pp.locator(".m", { hasText: "Propuesta de diseño" }).first().click(); await pp.waitForSelector(".vsub"); await pp.waitForTimeout(400); await pp.screenshot({ path: `${OUT}/play-2-mensaje.png` });
+try { await pp.click("#ais"); await pp.waitForSelector(".card-ai pre", { timeout: 8000 }); await pp.waitForTimeout(300); await pp.screenshot({ path: `${OUT}/play-3-yerleny-resumen.png` }); } catch { /* sin IA en esta captura */ }
+await ph.close();
+const phd = await b.newContext({ viewport: { width: 360, height: 640 }, deviceScaleFactor: 3, isMobile: true, hasTouch: true, colorScheme: "dark" });
+const pd = await phd.newPage(); await pd.goto("http://127.0.0.1:8078/?t=tok"); await pd.waitForSelector(".m"); await pd.waitForTimeout(500); await pd.screenshot({ path: `${OUT}/play-4-oscuro.png` }); await phd.close();
 console.log(errs.length ? "ERRORES: " + errs.join("\n") : "sin errores de consola");
 await b.close(); web.kill(); process.exit(0);

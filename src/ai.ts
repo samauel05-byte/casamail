@@ -1,6 +1,7 @@
 import { getAiEngines, getYerleny, type AiConfig } from "./store.js";
 import { localChat } from "./local-llm.js";
 import type { SearchQuery, Summary } from "./mail.js";
+import { wallToMs, tz, findMeetingLink } from "./calendar.js";
 
 // ============ Capa de proveedor: Anthropic nativo + cualquier API compatible con OpenAI ============
 export interface ToolDef { name: string; description: string; parameters: Record<string, unknown> }
@@ -128,6 +129,29 @@ export async function testAi() { return ask("Responde solo con la palabra OK.", 
 
 export const summarize = (m: MailLike) => ask(
   `Eres un asistente de correo. Resume en el idioma del correo. Formato EXACTO, sin repetir nada: una línea de resumen; luego "Puntos clave" (de 2 a 5 viñetas con contenido distinto, sin repetir asunto ni remitente); luego "Acciones pendientes" (viñetas; escribe "Ninguna" si no hay). Sé breve y fiel. ${SAFETY}`, wrap(m), 0.2, 400);
+
+/** Resumen corto para la notificación (lo que dice el correo y qué pide), no el resumen largo de la lectura. */
+export const notifySummary = (m: MailLike) => ask(
+  `Resume este correo para una notificación del móvil: máximo 2 frases cortas (menos de 220 caracteres en total), en el idioma del correo. Di QUIÉN escribe, QUÉ dice o pide y si hay fecha límite o algo urgente. Sin saludos, sin viñetas, sin comillas, sin repetir el asunto. ${SAFETY}`, wrap(m), 0.2, 120);
+
+export interface MeetingGuess { title: string; start: number; end: number; location?: string; link?: string }
+/**
+ * Detecta si el correo propone o confirma UNA reunión concreta (con día y hora). Devuelve null si no está claro:
+ * es preferible no avisar a inventar una cita. El resultado siempre se muestra al usuario para que lo confirme.
+ */
+export async function extractMeeting(m: MailLike, now = Date.now()): Promise<MeetingGuess | null> {
+  const today = new Intl.DateTimeFormat("es", { timeZone: tz(), weekday: "long", year: "numeric", month: "long", day: "numeric" }).format(now);
+  const raw = await ask(
+    `Hoy es ${today} (zona ${tz()}). Decide si el correo propone o confirma UNA reunión, llamada, videollamada o cita concreta con día Y hora. Responde SOLO con JSON: {"reunion":true|false,"titulo":"...","fecha":"AAAA-MM-DD","hora":"HH:MM","duracion_min":60,"lugar":""}. Resuelve "mañana", "el jueves", etc. a partir de la fecha de hoy. Si no hay día y hora claros, o solo es una idea vaga ("quedamos algún día"), responde {"reunion":false}. ${SAFETY}`, wrap(m), 0, 200);
+  let j: { reunion?: boolean; titulo?: string; fecha?: string; hora?: string; duracion_min?: number; lugar?: string };
+  try { j = parseJson(raw); } catch { return null; }
+  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(j.fecha ?? ""), t = /^(\d{1,2}):(\d{2})$/.exec(j.hora ?? "");
+  if (!j.reunion || !d || !t) return null;
+  const start = wallToMs(Number(d[1]), Number(d[2]), Number(d[3]), Number(t[1]), Number(t[2]));
+  if (!Number.isFinite(start) || start < now - 3600_000 || start > now + 400 * 864e5) return null; // pasada o absurda
+  const dur = Math.min(Math.max(Number(j.duracion_min) || 60, 5), 8 * 60);
+  return { title: (j.titulo || m.subject || "Reunión").toString().slice(0, 120), start, end: start + dur * 60_000, location: j.lugar?.toString().slice(0, 200) || undefined, link: findMeetingLink(m.text) };
+}
 
 /**
  * Los correos los envía el USUARIO con su propia firma: nunca deben mencionar ni firmar "Yerleny" ni hablar de la IA.

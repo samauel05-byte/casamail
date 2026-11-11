@@ -143,7 +143,7 @@ const folderMeta = f => FOLDER[f.specialUse] || (f.path === 'INBOX' ? FOLDER['\\
 async function folders(force) {
   let h = `<button class="btn btn-primary compose-btn" id="new">${I('pencil')} Redactar</button>`;
   h += `<div class="acct-pick"><select id="acct" aria-label="Cuenta">${S.accounts.length > 1 ? '<option value="*">Todas las cuentas</option>' : ''}${S.accounts.map(a => `<option value="${esc(a.id)}">${esc(a.email)}</option>`).join('')}<option value="${LOCAL}">Archivo local (en tu disco)</option></select></div>`;
-  const tail = `<div class="side-sep"></div><div class="nav" data-sched="1">${I('send')}<span>Salida</span><span class="n pill" id="outn" hidden></span></div>${S.acct !== '*' && S.acct !== LOCAL ? `<div class="nav" data-newf="1">${I('plus')}<span>Nueva carpeta</span></div>` : ''}<div class="nav" id="jobchip" data-jobs="1" hidden>${I('hdd')}<span id="jobtxt">Tarea en curso</span></div>
+  const tail = `<div class="side-sep"></div><div class="nav" data-cal="1">${I('calendar')}<span>Calendario</span><span class="n pill" id="caln" hidden></span></div><div class="nav" data-sched="1">${I('send')}<span>Salida</span><span class="n pill" id="outn" hidden></span></div>${S.acct !== '*' && S.acct !== LOCAL ? `<div class="nav" data-newf="1">${I('plus')}<span>Nueva carpeta</span></div>` : ''}<div class="nav" id="jobchip" data-jobs="1" hidden>${I('hdd')}<span id="jobtxt">Tarea en curso</span></div>
     <div class="side-foot">${I('lock', 'sm')}<span>Local y privado: tus correos no pasan por ningún servidor de CasaMail.</span></div>`;
   if (S.acct === '*') { $('#side').innerHTML = h + `<div class="nav on" data-all="1">${I('inbox')}<span>Recibidos (todas)</span></div>` + tail; }
   else if (S.acct === LOCAL) {
@@ -284,7 +284,7 @@ function renderMsg() {
   $('#view').innerHTML = `<div class="vtool">${tb('back', 'back', 'Volver', 'only-narrow')}${loc ? '' : tb('ar', 'archive', 'Archivar (E)') + tb('sp', 'spam', 'Marcar como spam')}${tb('tr', 'trash', loc ? 'Eliminar del archivo' : 'Papelera (#)')}<span class="vs"></span>${tb('un', 'mail', 'Marcar como no leído')}${loc ? '' : tb('sn', 'clock', 'Posponer')}${tb('st', 'star', 'Destacar (S)')}<a class="iconbtn" id="dl" href="/api/message/${m.uid}/eml?${qs()}" download title="Descargar como .eml" aria-label="Descargar como .eml">${I('download')}</a><span class="grow"></span>${tb('rp', 'reply', 'Responder (R)')}${loc ? '' : tb('ra', 'replyall', 'Responder a todos')}</div>
   <div class="vbody"><h1 class="vsub">${esc(m.subject)}</h1>
     <div class="vhead">${avatar(f.name, f.email, 'lg')}<div class="who"><div class="nm">${esc(f.name)} <span class="em">&lt;${esc(f.email)}&gt;</span></div><div class="to">Para ${esc(m.to || '—')}${m.cc ? ' · Cc ' + esc(m.cc) : ''}</div></div><span class="dt">${m.date ? new Date(m.date).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' }) : ''}</span></div>
-    <div class="aibar"><button class="btn btn-ai btn-sm" id="ais">${I('sparkles', 'sm')} Resumir</button><button class="btn btn-ai btn-sm" id="air">${I('sparkles', 'sm')} Sugerir respuestas</button></div><div id="aiout"></div>
+    <div class="aibar"><button class="btn btn-ai btn-sm" id="ais">${I('sparkles', 'sm')} Resumir</button><button class="btn btn-ai btn-sm" id="air">${I('sparkles', 'sm')} Sugerir respuestas</button>${loc ? '' : `<button class="btn btn-sm" id="agm">${I('calendar', 'sm')} Agendar reunión</button>`}</div><div id="aiout"></div>
     ${m.html && !S.images ? `<div class="privacy">${I('shield')}<span>Imágenes remotas bloqueadas para proteger tu privacidad.</span><button class="btn btn-sm" id="im">Cargar imágenes</button></div>` : ''}
     ${m.attachments.length ? `<div class="atts">${m.attachments.map(a => `<a class="att" href="/api/message/${m.uid}/attachment/${a.index}?${qs()}">${I('download')}<span>${esc(a.filename)}<small>${fmtSize(a.size)}</small></span></a>`).join('')}</div>` : ''}
     ${body}</div>`;
@@ -293,7 +293,7 @@ function renderMsg() {
   on('#rp', () => (loc ? compose({ to: f.email, subject: 'Re: ' + m.subject.replace(/^re:\s*/i, '') }) : compose({ reply: { all: false } }))); on('#ra', () => compose({ reply: { all: true } }));
   on('#st', () => toggleStar()); on('#un', () => act('flags', { read: false }, 'Marcado como no leído'));
   on('#ar', () => act('archive', {}, 'Archivado', 1)); on('#sp', () => act('spam', {}, 'Movido a spam', 1)); on('#tr', () => { if (loc && !confirm('¿Eliminar este mensaje del archivo local?')) return; act('trash', {}, loc ? 'Eliminado del archivo' : 'Movido a la papelera', 1); });
-  on('#sn', () => snoozeDialog());
+  on('#sn', () => snoozeDialog()); on('#agm', e => agendarMensaje(m, e.currentTarget));
   on('#ais', async e => {
     if (!needAi()) return; const b = e.currentTarget; busy(b, true); $('#aiout').innerHTML = `<div class="card-ai"><h4>${I('sparkles', 'sm')} Yerleny · Resumen</h4><div class="typing"><i></i><i></i><i></i></div></div>`;
     try { const r = await api('/api/ai/summarize?account=' + encodeURIComponent(A()), { uid: m.uid, folder: S.folder }); $('#aiout').innerHTML = `<div class="card-ai"><h4>${I('sparkles', 'sm')} Yerleny · Resumen</h4><pre>${esc(r.summary)}</pre></div>`; } catch (x) { $('#aiout').innerHTML = `<div class="card-ai err">${esc(x.message)}</div>`; }
@@ -422,11 +422,11 @@ function openModal(html, narrow) { const b = $('#mbox'); b.className = narrow ? 
 function closeModal() { $('#modal').hidden = true; clearInterval(modalTimer); oauthPoll && clearInterval(oauthPoll); }
 $('#modal').onclick = e => { if (e.target.id === 'modal') closeModal(); };
 $('#cfg').onclick = () => settings('cuentas');
-const TABS = [['cuentas', 'user', 'Cuentas'], ['archivo', 'hdd', 'Archivo local'], ['ia', 'sparkles', 'Yerleny'], ['firma', 'pencil', 'Firma'], ['envio', 'clock', 'Envío'], ['salida', 'send', 'Salida']];
+const TABS = [['cuentas', 'user', 'Cuentas'], ['archivo', 'hdd', 'Archivo local'], ['ia', 'sparkles', 'Yerleny'], ['firma', 'pencil', 'Firma'], ['avisos', 'bell', 'Avisos'], ['envio', 'clock', 'Envío'], ['salida', 'send', 'Salida']];
 function settings(tab = 'cuentas', pre) {
   openModal(`<nav class="set-nav"><h3>Ajustes</h3>${TABS.map(([k, ic, l]) => `<div class="nav ${k === tab ? 'on' : ''}" data-tab="${k}" role="button" tabindex="0">${I(ic)}<span>${l}</span></div>`).join('')}</nav><div class="set-body" id="sbody"><button class="iconbtn set-close" id="mx" aria-label="Cerrar">${I('x')}</button><div id="tabc"><div class="wait"><div class="spin"></div></div></div></div>`);
   clearInterval(modalTimer); $('#mx').onclick = closeModal; $$('[data-tab]').forEach(n => n.onclick = () => settings(n.dataset.tab));
-  ({ cuentas: tabCuentas, archivo: tabArchivo, ia: tabIA, firma: tabFirma, envio: tabEnvio, salida: tabSalida })[tab]($('#tabc'), pre).catch(e => { $('#tabc').innerHTML = `<p class="err">${esc(e.message)}</p>`; });
+  ({ cuentas: tabCuentas, archivo: tabArchivo, ia: tabIA, firma: tabFirma, avisos: tabAvisos, envio: tabEnvio, salida: tabSalida })[tab]($('#tabc'), pre).catch(e => { $('#tabc').innerHTML = `<p class="err">${esc(e.message)}</p>`; });
 }
 const provMark = { google: ['G', '#d9483b'], microsoft: ['M', '#2a6fdb'], imap: ['@', '#6b6558'] };
 
@@ -714,6 +714,7 @@ async function tabArchivo(c) {
 setInterval(pollJobs, 4000);
 $('#side').addEventListener('click', e => {
   const n = e.target.closest('.nav'); if (!n) return; document.body.classList.remove('menu');
+  if (n.dataset.cal) return openCalendar();
   if (n.dataset.sched) return settings('salida');
   if (n.dataset.import || n.dataset.jobs) return settings('archivo');
   if (n.dataset.newf) { const nm = prompt('Nombre de la carpeta'); if (nm) api(`/api/folders?account=${encodeURIComponent(S.acct)}`, { name: nm }).then(folders).catch(fail); return; }

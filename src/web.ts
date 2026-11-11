@@ -12,6 +12,8 @@ import * as mail from "./mail.js";
 import * as ai from "./ai.js";
 import * as localLlm from "./local-llm.js";
 import * as outbox from "./outbox.js";
+import * as notify from "./notify.js";
+import * as cal from "./calendar.js";
 import * as oauth from "./oauth.js";
 import * as archive from "./archive.js";
 import * as jobs from "./jobs.js";
@@ -20,12 +22,27 @@ import { importPst } from "./pst.js";
 import { pipeline } from "node:stream/promises";
 
 let PORT = Number(process.env.PORT ?? 8025); // se actualiza con el puerto real al arrancar
-const HOST = "127.0.0.1"; // app local: solo accesible desde este equipo
-const TOKEN = process.env.CASAMAIL_TOKEN ?? (() => {
+// Por defecto CasaMail solo es accesible desde este equipo. El MODO REMOTO (CASAMAIL_REMOTE=1) es opcional y lo usa la app Android:
+// escucha en la red, solo atiende a los nombres de host de CASAMAIL_ALLOWED_HOSTS y limita los intentos con token equivocado.
+const REMOTE = () => process.env.CASAMAIL_REMOTE === "1";
+const HOST = REMOTE() ? (process.env.CASAMAIL_BIND || "0.0.0.0") : "127.0.0.1";
+const allowedHosts = () => (process.env.CASAMAIL_ALLOWED_HOSTS ?? "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
+const isLocalHost = (h: string) => /^(127\.0\.0\.1|localhost)(:\d+)?$/.test(h);
+const hostOk = (h: string) => isLocalHost(h) || (REMOTE() && allowedHosts().includes(h.replace(/:\d+$/, "").toLowerCase()));
+const fails = new Map<string, { n: number; since: number }>(); // intentos fallidos por IP
+const FAIL_MAX = 10, FAIL_WINDOW = 10 * 60_000;
+function clientIp(req: Request): string {
+  const ra = req.socket.remoteAddress ?? "?";
+  const viaProxy = /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(ra); // túnel local (Tailscale Serve, cloudflared…): la IP real viene en la cabecera
+  const fwd = viaProxy ? String(req.headers["cf-connecting-ip"] ?? req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() : "";
+  return fwd || ra;
+}
+const TOKEN: string = process.env.CASAMAIL_TOKEN ?? (() => {
   let t = store.readJson<{ t?: string }>("token.json", {}).t;
   if (!t) { t = crypto.randomBytes(24).toString("hex"); store.writeJson("token.json", { t }); }
   return t;
 })();
+const sameToken = (a: unknown) => typeof a === "string" && a.length === TOKEN.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(TOKEN));
 const pub = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "public");
 
 const app = express();
@@ -34,13 +51,25 @@ app.use(express.json({ limit: "40mb" }));
 
 // Defensa contra DNS-rebinding y CSRF: Host válido + token en cookie.
 app.use((req: Request, res: Response, next: NextFunction) => {
-  if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.host ?? "")) return res.status(403).end();
+  const host = req.headers.host ?? "";
+  if (!hostOk(host)) return res.status(403).end();
   // Retorno de OAuth: llega desde accounts.google.com / login.microsoftonline.com, así que no lleva cookie Strict.
   // Se protege con `state` aleatorio de un solo uso + PKCE, no con la cookie.
   if (req.path === "/oauth/callback") return next();
-  if (req.query.t === TOKEN) { res.setHeader("Set-Cookie", `cm=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`); return res.redirect(req.path); }
+  const ip = clientIp(req), f = fails.get(ip);
+  if (f && Date.now() - f.since > FAIL_WINDOW) fails.delete(ip);
+  if (f && f.n >= FAIL_MAX && Date.now() - f.since <= FAIL_WINDOW) return res.status(429).send("Demasiados intentos. Espera unos minutos.");
+  if (sameToken(req.query.t)) {
+    fails.delete(ip);
+    res.setHeader("Set-Cookie", `cm=${TOKEN}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000${isLocalHost(host) ? "" : "; Secure"}`); return res.redirect(req.path);
+  }
   const cookie = /(?:^|;\s*)cm=([^;]+)/.exec(req.headers.cookie ?? "")?.[1];
-  if (cookie !== TOKEN) return res.status(401).send("Abre CasaMail con el enlace que imprime al arrancar (npm start).");
+  const bearer = /^Bearer (\S+)$/.exec(String(req.headers.authorization ?? ""))?.[1]; // la app Android consulta los avisos sin navegador
+  if (sameToken(bearer)) return next();
+  if (!sameToken(cookie)) {
+    if (cookie || bearer || req.query.t !== undefined) { const g = fails.get(ip) ?? { n: 0, since: Date.now() }; g.n++; fails.set(ip, g); } // solo cuentan los intentos con un token equivocado
+    return res.status(401).send("Abre CasaMail con el enlace que imprime al arrancar (npm start).");
+  }
   next();
 });
 
@@ -295,6 +324,7 @@ const lock = outbox.createSchedulerLock();
 async function tick() {
   if (!lock.acquire()) return; // otra instancia de CasaMail es la que envía
   await outbox.tick();
+  await notify.tick().catch((e) => console.warn("[avisos]", (e as Error).message));
   const sn = store.readJson<Snooze[]>("snoozed.json", []);
   const due = sn.filter((s) => s.until <= Date.now());
   for (const s of due) { try { await mail.setFlags(store.getAccount(s.account), s.folder, s.uid, { read: false }); } catch { /* mensaje movido */ } }
@@ -384,9 +414,57 @@ app.post("/api/ai/agent", h(async (r) => {
   }, store.getSettings().signatures[a.id]);
 }));
 
+// ---------- avisos (notificaciones) y calendario ----------
+const toMs = (v: unknown) => (typeof v === "number" ? v : typeof v === "string" && v ? Date.parse(v) : NaN);
+app.get("/api/notifications", async (req, res) => {
+  const after = Number(req.query.after ?? 0) || 0, wait = Math.min(Number(req.query.wait ?? 0) || 0, 30) * 1000;
+  try { res.json(wait ? await notify.waitFor(after, wait) : notify.list(after)); } catch (e) { res.status(500).json({ error: String((e as Error).message) }); }
+});
+app.post("/api/notifications/read", h(async (r) => { const b = r.body as { ids?: number[]; all?: boolean }; notify.markRead(b.all ? "all" : (b.ids ?? []).map(Number)); return notify.list(Number.MAX_SAFE_INTEGER); }));
+app.post("/api/notifications/clear", h(async () => { notify.clearAll(); return { ok: true }; }));
+app.post("/api/notifications/test", h(async () => ({ ok: !!notify.push({ kind: "system", title: "Prueba de aviso", body: "Si ves esto, las notificaciones de CasaMail funcionan." }) })));
+app.post("/api/notifications/check", h(async () => ({ nuevos: await notify.checkMail() })));
+app.post("/api/notifications/:id/agendar", h(async (r) => {
+  const b = r.body as { title?: string; start?: unknown; end?: unknown; location?: string };
+  const e = notify.agendarAviso(Number(r.params.id), { title: b.title, start: toMs(b.start) || undefined, end: toMs(b.end) || undefined, location: b.location });
+  return { event: e };
+}));
+app.post("/api/notifications/:id/descartar", h(async (r) => { notify.descartarAviso(Number(r.params.id)); return { ok: true }; }));
+app.get("/api/notify/settings", h(async () => notify.getSettings()));
+app.put("/api/notify/settings", h(async (r) => notify.saveSettings(r.body as Partial<notify.NotifySettings>)));
+
+app.get("/api/calendar", h(async (r) => {
+  const from = toMs(r.query.from) || Date.now() - 864e5, to = toMs(r.query.to) || from + 90 * 864e5;
+  return { events: cal.between(from, to), tz: cal.tz() };
+}));
+app.post("/api/calendar", h(async (r) => {
+  const b = r.body as { title?: string; start?: unknown; end?: unknown; allDay?: boolean; location?: string; link?: string; notes?: string; source?: cal.CalEvent["source"] };
+  const start = toMs(b.start); if (!b.title?.trim() || !Number.isFinite(start)) throw new Error("Hace falta un título y una fecha/hora de inicio válida");
+  const end = toMs(b.end); return cal.addEvent({ title: b.title.trim().slice(0, 200), start, end: Number.isFinite(end) && end >= start ? end : start + 3600_000, allDay: !!b.allDay, location: b.location?.slice(0, 300), link: b.link?.slice(0, 500), notes: b.notes?.slice(0, 2000), source: b.source, via: "manual" }, notify.getSettings().reminders);
+}));
+app.put("/api/calendar/:id", h(async (r) => {
+  const b = r.body as Record<string, unknown>, p: Partial<cal.CalEvent> = {};
+  if (typeof b.title === "string" && b.title.trim()) p.title = b.title.trim().slice(0, 200);
+  if (Number.isFinite(toMs(b.start))) p.start = toMs(b.start); if (Number.isFinite(toMs(b.end))) p.end = toMs(b.end);
+  for (const k of ["location", "link", "notes"] as const) if (typeof b[k] === "string") p[k] = (b[k] as string).slice(0, 2000);
+  if (typeof b.allDay === "boolean") p.allDay = b.allDay;
+  return cal.updateEvent(r.params.id, p, notify.getSettings().reminders);
+}));
+app.delete("/api/calendar/:id", h(async (r) => ({ ok: cal.removeEvent(r.params.id) })));
+const sendIcs = (res: Response, name: string, events: cal.CalEvent[]) => { res.setHeader("Content-Type", "text/calendar; charset=utf-8"); res.setHeader("Content-Disposition", `attachment; filename="${name}"`); res.send(cal.toIcs(events)); };
+app.get("/api/calendar.ics", (_req, res) => sendIcs(res, "casamail.ics", cal.listEvents()));
+app.get("/api/calendar/:id.ics", (req, res) => { const e = cal.listEvents().find((x) => x.id === req.params.id); if (!e) return res.status(404).end(); sendIcs(res, "reunion.ics", [e]); });
+/** "Agendar reunión" desde un mensaje abierto: devuelve la propuesta para que el usuario la revise. */
+app.post("/api/message/:uid/meeting", h(async (r) => {
+  if (isLocal(r)) throw new Error("Abre el mensaje en su cuenta de correo para agendarlo");
+  const a = acc(r), f = folder(r), m = await mail.getMessage(a, f, uidOf(r), false);
+  const d = await notify.detectMeeting(a, f, m, { ai: true });
+  return { proposal: d?.kind === "event" ? d.proposal : null, cancelled: d?.kind === "cancel" ? d.title : null, subject: m.subject };
+}));
+
 app.use(express.static(pub));
 
-export interface RunningServer { port: number; url: string; origin: string; token: string; close(): Promise<void>; allowImportPath(file: string): string; activeJobs(): number }
+export interface RunningServer { onNotify(fn: (n: notify.Notif) => void): () => void; port: number; url: string; origin: string; token: string; close(): Promise<void>; allowImportPath(file: string): string; activeJobs(): number }
 
 /** Arranca CasaMail. Lo usan `npm start` y la aplicación de escritorio (Electron). */
 export async function startServer(o: { port?: number; fallbackRandom?: boolean; open?: boolean; quiet?: boolean } = {}): Promise<RunningServer> {
@@ -403,12 +481,13 @@ export async function startServer(o: { port?: number; fallbackRandom?: boolean; 
   tick().catch(() => {});
   if (!process.env.CASAMAIL_NO_WARMUP) setTimeout(() => localLlm.warmup(true).catch(() => {}), 4000).unref();
   const origin = `http://${HOST}:${PORT}`, url = `${origin}/?t=${TOKEN}`;
-  if (!o.quiet) console.log(`\n  CasaMail está corriendo → ${url}\n  (solo accesible desde este equipo)\n`);
+  if (!o.quiet) console.log(`\n  CasaMail está corriendo → ${url}\n  ${REMOTE() ? `MODO REMOTO: escucha en ${HOST}:${PORT}. Hosts permitidos: ${allowedHosts().join(", ") || "(ninguno: define CASAMAIL_ALLOWED_HOSTS)"}. Usa siempre HTTPS (túnel).` : "(solo accesible desde este equipo)"}\n`);
   if (o.open) {
     const cmd = process.platform === "darwin" ? ["open", [url]] : process.platform === "win32" ? ["cmd", ["/c", "start", "", url]] : ["xdg-open", [url]];
     try { spawn(cmd[0] as string, cmd[1] as string[], { stdio: "ignore", detached: true }).on("error", () => {}).unref(); } catch { /* sin navegador */ }
   }
   return {
+    onNotify: (fn) => { notify.bus.on("notify", fn); return () => notify.bus.off("notify", fn); },
     port: PORT, url, origin, token: TOKEN, allowImportPath, activeJobs: jobs.activeCount,
     close: () => new Promise<void>((resolve) => { clearInterval(timer); lock.release(); mail.closeConnections(); server.close(() => resolve()); server.closeAllConnections?.(); }),
   };
