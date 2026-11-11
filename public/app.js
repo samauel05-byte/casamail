@@ -47,7 +47,7 @@ const ICONS = {
   home: '<path d="M8 15.5 16 9l8 6.5"/>',
 };
 /* Logo de CasaMail (vectorial; usa las variables de color del tema) */
-const LOGO = (w = 44) => `<img class="logo-img" src="mark.png" width="${w}" height="${Math.round(w * 0.84)}" alt="" style="display:block;object-fit:contain">`; /* logo de CasaMail (imagen con fondo transparente) */
+const LOGO = (w = 44) => { const a = `width="${w}" height="${Math.round(w * 0.84)}" alt="" style="object-fit:contain"`; return `<img class="logo-img lc" src="mark.png" ${a}><img class="logo-img ld" src="mark-claro.png" ${a}>`; }; /* logo de CasaMail: de color en tema claro, blanco en tema oscuro (sin cajas de fondo) */
 const I = (n, c = '') => `<svg class="ic ${c}" viewBox="0 0 24 24" aria-hidden="true">${ICONS[n] || ''}</svg>`;
 
 /* ---------- estado ---------- */

@@ -30,7 +30,7 @@ check("título de la ventana: CasaMail", (await win.title()) === "CasaMail");
 const url = win.url();
 check("sirve desde 127.0.0.1 (solo este equipo)", url.startsWith("http://127.0.0.1:"));
 await new Promise((r) => setTimeout(r, 600)); await win.screenshot({ path: process.env.SHOT ?? "/tmp/desktop.png" }).catch(() => {});
-check("el logo de CasaMail está en la cabecera", (await win.locator("#logomark img").count()) === 1);
+check("el logo de CasaMail está en la cabecera", (await win.locator("#logomark img.lc").count()) === 1);
 check("no tiene Node.js expuesto a la página (aislamiento)", await win.evaluate(() => typeof (window as unknown as { require?: unknown }).require === "undefined" && typeof (window as unknown as { process?: unknown }).process === "undefined"));
 check("candado del planificador tomado por la app", fs.existsSync(path.join(HOME, "scheduler.lock")));
 

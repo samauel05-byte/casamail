@@ -390,9 +390,10 @@ details.adv{border:1px solid var(--line);border-radius:12px;padding:10px 14px;ba
 #mbox.narrow:has(.wide){width:min(680px,96vw)}
 main.welcome #view{display:flex}  /* en el móvil la vista está oculta hasta abrir un mensaje: la bienvenida (sin cuentas) debe verse siempre */
 
-/* logo nuevo: en tema oscuro el interior blanco del símbolo necesita su fondo claro */
-:root[data-theme=dark] .logo-img{background:#fff;border-radius:12px;padding:3px;box-sizing:border-box}
-@media(prefers-color-scheme:dark){:root[data-theme=auto] .logo-img{background:#fff;border-radius:12px;padding:3px;box-sizing:border-box}}
+/* logo: de color en tema claro, blanco en tema oscuro (sin fondos blancos) */
+.logo-img{display:block}.logo-img.ld{display:none}
+:root[data-theme=dark] .logo-img.lc{display:none}:root[data-theme=dark] .logo-img.ld{display:block}
+@media(prefers-color-scheme:dark){:root[data-theme=auto] .logo-img.lc{display:none}:root[data-theme=auto] .logo-img.ld{display:block}}
 .logo-word b{color:#0a5ce6}
 /* cabecera estrecha: con la campana ya no cabía todo y el botón IA se montaba sobre ella */
 @media(max-width:820px){.search{overflow:hidden}.aitoggle{flex:none}.search input{min-width:0}}
