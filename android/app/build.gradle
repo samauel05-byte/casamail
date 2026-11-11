@@ -2,7 +2,7 @@ plugins { id("com.android.application") }
 
 // Versión: la fija el flujo de GitHub (ANDROID_VERSION_CODE) o, en local, 1. Cada subida a Google Play necesita un código MAYOR que el anterior.
 def vcode = (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInteger()
-def vname = System.getenv("ANDROID_VERSION_NAME") ?: "0.3.6"
+def vname = System.getenv("ANDROID_VERSION_NAME") ?: "0.4.0"
 
 // La interfaz web (../public) se empaqueta dentro de la app: el modo demostración la muestra con datos de ejemplo, sin servidor.
 def demoAssets = layout.buildDirectory.dir("generated/demo-assets")
@@ -17,7 +17,7 @@ android {
     compileSdk = 36
     defaultConfig {
         applicationId = "app.casamail.movil"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 36
         versionCode = vcode
         versionName = vname
@@ -45,4 +45,11 @@ android {
     sourceSets { main { assets.srcDir(demoAssets) } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     lint { abortOnError = false }
+    packaging { resources { pickFirsts += ["META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/LICENSE", "META-INF/NOTICE", "META-INF/DEPENDENCIES"] } }
+}
+
+dependencies {
+    // Cliente IMAP/SMTP (JavaMail para Android): el correo se gestiona dentro del propio móvil, sin servidor.
+    implementation("com.sun.mail:android-mail:1.6.7")
+    implementation("com.sun.mail:android-activation:1.6.7")
 }

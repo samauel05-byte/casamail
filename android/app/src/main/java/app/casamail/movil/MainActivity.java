@@ -50,6 +50,13 @@ public class MainActivity extends Activity {
     /** true mientras la app está en pantalla: entonces los avisos se ven dentro y no se duplican como notificaciones. */
     static volatile boolean visible;
     private String pendingUid, pendingAccount; // mensaje que abrir al tocar una notificación
+    private boolean nativo;                            // modo independiente: el correo se gestiona dentro del móvil, sin servidor
+    private Nativo puente;
+    private final android.os.Handler reloj = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable bandeja = new Runnable() { @Override public void run() {
+        if (nativo) new Thread(() -> { try { Nativo.api(MainActivity.this).procesarBandeja(System.currentTimeMillis()); } catch (Throwable ignored) { } }).start();
+        reloj.postDelayed(this, 20000);
+    } };
     private boolean demo;                              // modo demostración: datos de ejemplo, sin servidor
     private static final String DEMO_ORIGIN = "https://appassets.androidplatform.net";
     private SharedPreferences prefs;
@@ -58,8 +65,8 @@ public class MainActivity extends Activity {
     private ValueCallback<Uri[]> fileCallback;
     private int pad;
 
-    @Override protected void onStart() { super.onStart(); visible = true; }
-    @Override protected void onStop() { visible = false; super.onStop(); }
+    @Override protected void onStart() { super.onStart(); visible = true; reloj.postDelayed(bandeja, 5000); }
+    @Override protected void onStop() { visible = false; reloj.removeCallbacks(bandeja); super.onStop(); }
     @Override protected void onNewIntent(Intent i) { super.onNewIntent(i); setIntent(i); leerExtras(i); abrirPendiente(); }
 
     private void leerExtras(Intent i) {
@@ -97,7 +104,7 @@ public class MainActivity extends Activity {
             return insets;
         });
         String server = prefs.getString("server", null), token = prefs.getString("token", null);
-        if (server != null && token != null) openWeb(server, token); else showForm(null, server);
+        if (server != null && token != null) openWeb(server, token); else { nativo = true; openWeb(DEMO_ORIGIN, null); }   // sin servidor guardado: la app funciona sola en el móvil
     }
 
     // ---------- pantalla de conexión ----------
@@ -126,10 +133,14 @@ public class MainActivity extends Activity {
 
         // ver la app sin cuenta ni servidor
         Button demoBtn = boton("Probar con datos de ejemplo", true);
-        demoBtn.setOnClickListener(v -> { demo = true; openWeb(DEMO_ORIGIN, null); });
+        demoBtn.setOnClickListener(v -> { demo = true; nativo = false; openWeb(DEMO_ORIGIN, null); });
         f.addView(demoBtn, new LinearLayout.LayoutParams(-1, dp(52)));
         TextView nota = text("Sin cuenta ni servidor: para verla y probarla.", 13, false); nota.setGravity(Gravity.CENTER); nota.setTextColor(GRIS); nota.setPadding(0, dp(6), 0, dp(22));
         f.addView(nota);
+
+        Button movil = boton("Iniciar sesión en el móvil", false);
+        movil.setOnClickListener(v -> { nativo = true; demo = false; openWeb(DEMO_ORIGIN, null); });
+        LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-1, dp(52)); mlp.bottomMargin = dp(16); f.addView(movil, mlp);
 
         // conectar con tu CasaMail
         LinearLayout card = new LinearLayout(this);
@@ -160,6 +171,7 @@ public class MainActivity extends Activity {
         TextView help = text("¿Dónde encuentro esto? Al arrancar CasaMail en tu PC se imprime un enlace con la clave (…/?t=CLAVE). Pégalo aquí entero. Guía paso a paso: github.com/samauel05-byte/casamail (docs/ANDROID.md).", 12, false);
         help.setTextColor(GRIS); help.setPadding(dp(4), dp(18), dp(4), 0);
         f.addView(help);
+        TextView cl = text("Desarrollado por CasaLabs", 12, false); cl.setTextColor(GRIS); cl.setGravity(Gravity.CENTER); cl.setPadding(0, dp(18), 0, 0); f.addView(cl);
     }
 
     /** Botón redondeado de la marca: relleno azul (principal) o con borde azul (secundario). */
@@ -195,18 +207,21 @@ public class MainActivity extends Activity {
         cm.setAcceptCookie(true);
         cm.setAcceptThirdPartyCookies(web, false);
         final String origin = server;
+        if (nativo && !demo) { puente = new Nativo(this, web); web.addJavascriptInterface(puente, "CasaNative"); }
         web.setWebViewClient(new WebViewClient() {
             /** En la demostración todo sale de los recursos de la app: no hay red. */
             @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
-                if (!demo) return null;
+                if (!demo && !nativo) return null;
                 Uri u = r.getUrl(); String path = u.getPath() == null ? "" : u.getPath();
+                if (nativo && puente != null && DEMO_ORIGIN.equals(u.getScheme() + "://" + u.getHost()) && path.startsWith("/api/") && "GET".equals(r.getMethod())) return puente.servir(u);   // adjuntos
                 if (!DEMO_ORIGIN.equals(u.getScheme() + "://" + u.getHost()) || !path.startsWith("/demo/") || path.contains("..")) return new WebResourceResponse("text/plain", "UTF-8", 404, "No encontrado", null, new java.io.ByteArrayInputStream(new byte[0]));
                 try { return new WebResourceResponse(mime(path), "UTF-8", getAssets().open(path.substring(1))); }
                 catch (java.io.IOException e) { return new WebResourceResponse("text/plain", "UTF-8", 404, "No encontrado", null, new java.io.ByteArrayInputStream(new byte[0])); }
             }
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
-                if ("casamail-demo-exit".equals(u.getScheme())) { demo = false; showForm(null, prefs.getString("server", null)); return true; }
+                if ("casamail-demo-exit".equals(u.getScheme())) { demo = false; nativo = false; showForm(null, prefs.getString("server", null)); return true; }
+                if ("casamail-demo-start".equals(u.getScheme())) { demo = true; nativo = false; openWeb(DEMO_ORIGIN, null); return true; }
                 if (sameOrigin(u, origin)) return false;
                 String sch = u.getScheme() == null ? "" : u.getScheme();
                 if (sch.equals("https") || sch.equals("mailto") || sch.equals("tel")) {       // enlaces externos: en el navegador, nunca dentro de la app
@@ -242,6 +257,11 @@ public class MainActivity extends Activity {
         web.setDownloadListener((url, ua, cd, mime, len) -> {                      // exportar a MBOX, adjuntos…
             try {
                 if (!sameOrigin(Uri.parse(url), origin)) return;
+                if (nativo && Uri.parse(url).getPath() != null && Uri.parse(url).getPath().startsWith("/api/")) {   // adjunto del correo del propio móvil
+                    final Uri du = Uri.parse(url);
+                    new Thread(() -> { String nombre = puente == null ? null : puente.descargar(this, du); runOnUiThread(() -> Toast.makeText(this, nombre != null ? "Guardado en Descargas: " + nombre : "No se pudo descargar", Toast.LENGTH_LONG).show()); }).start();
+                    return;
+                }
                 DownloadManager.Request q = new DownloadManager.Request(Uri.parse(url));
                 String name = URLUtil.guessFileName(url, cd, mime);
                 q.addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url));
@@ -251,7 +271,7 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "Descargando " + name, Toast.LENGTH_SHORT).show();
             } catch (Exception e) { Toast.makeText(this, "No se pudo descargar", Toast.LENGTH_SHORT).show(); }
         });
-        web.loadUrl(demo ? DEMO_ORIGIN + "/demo/index.html?demo=1" : server + "/?t=" + token);    // el servidor guarda una cookie y redirige a la página sin la clave
+        web.loadUrl(demo ? DEMO_ORIGIN + "/demo/index.html?demo=1" : nativo ? DEMO_ORIGIN + "/demo/index.html" : server + "/?t=" + token);    // el servidor guarda una cookie y redirige a la página sin la clave
     }
 
     private static String mime(String path) {
