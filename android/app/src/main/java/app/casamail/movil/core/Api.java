@@ -200,7 +200,7 @@ public final class Api {
         boolean ya = b.optBoolean("now"); int min = retraso(); long cuando = 0;
         if (!b.optString("sendAt").isEmpty() && b.opt("sendAt") != JSONObject.NULL) try { cuando = java.time.Instant.parse(b.getString("sendAt")).toEpochMilli(); } catch (Exception ignored) { }
         long ahora = System.currentTimeMillis(); if (cuando > ahora + 30_000) { /* programado */ } else if (ya || min == 0) { correo.enviar(c, correo.construir(c, b)); return ok("{\"sent\":true,\"accepted\":[\"ok\"]}"); } else cuando = ahora + min * 60_000L;
-        JSONObject item = new JSONObject().put("id", UUID.randomUUID().toString().substring(0, 8)).put("account", c.id).put("kind", cuando > ahora + min * 60_000L + 60_000 ? "scheduled" : "queued").put("to", b.optString("to")).put("subject", b.optString("subject")).put("sendAt", cuando).put("payload", b);
+        JSONObject item = new JSONObject().put("id", UUID.randomUUID().toString().substring(0, 8)).put("account", c.id).put("kind", cuando > ahora + min * 60_000L + 60_000 ? "scheduled" : "outbox").put("to", b.optString("to")).put("subject", b.optString("subject")).put("sendAt", cuando).put("payload", b);
         synchronized (this) { JSONArray a = new JSONArray(alm.leer("bandeja") == null ? "[]" : alm.leer("bandeja")); a.put(item); alm.guardar("bandeja", a.toString()); }
         return ok(new JSONObject().put("queued", true).put("kind", item.getString("kind")).put("id", item.getString("id")).put("sendAt", cuando));
     }
