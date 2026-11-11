@@ -385,6 +385,7 @@ function snoozeDialog() {
 function compose(o = {}) {
   if (!S.accounts.length) return toast('Para escribir necesitas una cuenta conectada. Añádela en Ajustes → Cuentas.', { kind: 'bad', action: 'Añadir', onAction: () => settings('cuentas') });
   S.reply = o.reply || null; S.files = []; renderFiles(); const r = !!S.reply;
+  document.body.classList.remove('menu');   // cierra el menú lateral del móvil (si estaba abierto) para que no tape la ventana de redactar
   $('#compose').hidden = false; $('#compose').classList.remove('min'); $('#ctitle').textContent = r ? 'Responder' : 'Mensaje nuevo';
   $('#from').innerHTML = S.accounts.map(a => `<option value="${esc(a.id)}">${esc(a.email)}</option>`).join(''); $('#from').value = r ? A() : (o.from || firstAcct());
   $('#rowfrom').hidden = r || S.accounts.length < 2;

@@ -22,7 +22,7 @@ public final class IA {
     public static final class ErrorIA extends Exception { public ErrorIA(String m) { super(m); } }
 
     private static final String HOST = "https://generativelanguage.googleapis.com/v1beta/models/";
-    private static final String MODELO_DEF = "gemini-2.0-flash";
+    private static final String MODELO_DEF = "gemini-flash-lite-latest";   // Flash-Lite: el modelo más rápido y de menor costo; alias que Google mantiene al día. Rápido = no se queda "comprobando".
     private final Almacen alm;
 
     public IA(Almacen alm) { this.alm = alm; }
@@ -48,7 +48,7 @@ public final class IA {
             body.put("contents", new JSONArray().put(new JSONObject().put("role", "user").put("parts", new JSONArray().put(new JSONObject().put("text", usuario)))));
             body.put("generationConfig", new JSONObject().put("temperature", temp).put("maxOutputTokens", maxTokens));
             c = (HttpURLConnection) new URL(HOST + modelo() + ":generateContent?key=" + URLEncoder.encode(k, "UTF-8")).openConnection();
-            c.setConnectTimeout(15000); c.setReadTimeout(45000); c.setRequestMethod("POST"); c.setDoOutput(true);
+            c.setConnectTimeout(15000); c.setReadTimeout(60000); c.setRequestMethod("POST"); c.setDoOutput(true);
             c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
             try (OutputStream o = c.getOutputStream()) { o.write(body.toString().getBytes("UTF-8")); }
             int code = c.getResponseCode();
@@ -67,7 +67,8 @@ public final class IA {
             if (out.isEmpty()) throw new ErrorIA("La IA devolvió una respuesta vacía. Prueba otra vez.");
             return out;
         } catch (ErrorIA e) { throw e; }
-        catch (UnknownHostException | SocketTimeoutException e) { throw new ErrorIA("Sin conexión para usar Yerleny. Revisa tu internet e inténtalo de nuevo."); }
+        catch (SocketTimeoutException e) { throw new ErrorIA("Yerleny tardó demasiado en responder. Prueba otra vez (si tu conexión va lenta puede tardar)."); }
+        catch (UnknownHostException e) { throw new ErrorIA("Sin conexión para usar Yerleny. Revisa tu internet e inténtalo de nuevo."); }
         catch (Exception e) { throw new ErrorIA("No se pudo usar Yerleny: " + e.getMessage()); }
         finally { if (c != null) c.disconnect(); }
     }
@@ -131,6 +132,17 @@ public final class IA {
             default: ins = "Mejora la redacción manteniendo el significado y el tono."; break;
         }
         return generar("Reescribes texto de correos. " + ins + " Devuelve SOLO el texto resultante, sin comillas ni comentarios.", texto, 0.3, 800);
+    }
+
+    /** Prioriza (triage) una lista de correos solo por sus cabeceras. Devuelve [{uid, priority, category, why}]. */
+    public JSONArray triage(JSONArray msgs) throws ErrorIA, JSONException {
+        StringBuilder rows = new StringBuilder(); int n = Math.min(msgs.length(), 40);
+        for (int i = 0; i < n; i++) { JSONObject m = msgs.optJSONObject(i); if (m == null) continue; rows.append(m.optLong("uid")).append("\t").append(m.optString("from")).append("\t").append(m.optString("subject")).append("\t").append(m.optString("date", "")).append("\n"); }
+        if (rows.length() == 0) return new JSONArray();
+        String raw = generar("Clasifica correos solo por sus cabeceras. Devuelve SOLO JSON: [{\"uid\": number, \"priority\": 1|2|3 (3=urgente/requiere acción, 1=ignorable), \"category\": \"personal\"|\"trabajo\"|\"facturas\"|\"newsletter\"|\"notificación\"|\"social\"|\"sospechoso\", \"why\": string de máx. 8 palabras}]. " + SEG, rows.toString(), 0, 1500);
+        JSONArray arr = json(raw), out = new JSONArray();
+        if (arr != null) for (int i = 0; i < arr.length(); i++) { JSONObject o = arr.optJSONObject(i); if (o != null && o.has("uid")) out.put(o); }
+        return out;
     }
 
     /** Chat sencillo del asistente: responde y, si el usuario pide escribir un correo, puede devolver un borrador. */
