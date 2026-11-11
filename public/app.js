@@ -520,6 +520,7 @@ async function addPane(kind, hint, preset) {
       ${kind === 'google' ? `<label class="lb">Secreto de cliente</label><input id="ocs" class="field" type="password" placeholder="${cur?.hasSecret ? '•••• (guardado)' : ''}" autocomplete="off">` : `<label class="lb">Inquilino (opcional; déjalo vacío salvo que tu app sea de un solo directorio)</label><input id="oct" class="field" value="${esc(cur?.tenant || '')}" placeholder="common" autocomplete="off">`}</details>
     <div class="row"><button class="btn btn-primary" id="ogo">${I('lock', 'sm')} ${hint ? 'Reconectar' : 'Conectar'} con ${name}</button><span id="ost" class="mut"></span></div>`;
   $$('[data-copy]').forEach(b => b.onclick = () => { navigator.clipboard?.writeText(b.dataset.copy); toast('Copiado'); });
+  if (kind === 'google' && !hint) { p.insertAdjacentHTML('afterbegin', `<div class="note ok-note" style="margin-bottom:12px">${I('key')}<span><b>¿Lo quieres más fácil?</b> Conecta Gmail con una <b>contraseña de aplicación</b>: 2 minutos y sin crear credenciales en Google Cloud. <button class="btn btn-sm btn-primary" id="gsimple" style="margin-left:6px">Usar contraseña de aplicación</button></span></div>`); $('#gsimple').onclick = () => addPane('imap', undefined, 'gmail'); }
   $('#ogo').onclick = () => oauthConnect(kind, hint);
 }
 let oauthPoll = null;
