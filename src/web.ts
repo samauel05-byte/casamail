@@ -14,6 +14,7 @@ import * as localLlm from "./local-llm.js";
 import * as outbox from "./outbox.js";
 import * as notify from "./notify.js";
 import * as idle from "./idle.js";
+import * as sigs from "./signature.js";
 import * as cal from "./calendar.js";
 import * as oauth from "./oauth.js";
 import * as archive from "./archive.js";
@@ -306,10 +307,27 @@ async function dispatch(a: store.Account, payload: mail.Outgoing, o: { sendAt?: 
   const it = outbox.enqueue(a.id, payload);
   return { queued: true, kind: it.kind, id: it.id, sendAt: it.sendAt };
 }
-app.post("/api/send", h(async (r) => { const { sendAt, now, ...payload } = r.body as Sendable; return dispatch(acc(r), payload, { sendAt, now }); }));
+app.post("/api/send", h(async (r) => {
+  const { sendAt, now, signature, ...payload } = r.body as Sendable & { signature?: string }, a = acc(r);
+  const out = payload.html ? payload : sigs.withSignature(payload, sigs.pick(a.id, signature, false)); // la firma (con su logo) se añade aquí; si quien llama ya trae HTML, se respeta
+  return dispatch(a, out, { sendAt, now });
+}));
 app.post("/api/message/:uid/reply", h(async (r) => {
   const a = acc(r);
-  return dispatch(a, await mail.buildReply(a, folder(r), uidOf(r), { text: r.body.text, replyAll: r.body.replyAll }), { now: r.body.now });
+  return dispatch(a, await mail.buildReply(a, folder(r), uidOf(r), { text: r.body.text, replyAll: r.body.replyAll }, sigs.pick(a.id, r.body.signature, true)), { now: r.body.now });
+}));
+// ---------- firmas (con imagen) ----------
+app.get("/api/signatures", h(async () => Object.fromEntries(store.loadAccounts().map((a) => [a.id, sigs.forAccount(a.id)]))));
+app.put("/api/signatures/:account", h(async (r) => { store.getAccount(r.params.account); return sigs.save(r.params.account, r.body as Partial<sigs.SigSet>); }));
+/** Busca la firma en los últimos correos enviados de la cuenta, para no tener que rehacerla. */
+app.post("/api/signatures/:account/import", h(async (r) => {
+  const a = store.getAccount(r.params.account), seen = new Set<string>(), found: { subject: string; date: string | null; html: string }[] = [];
+  for (const m of await mail.sentSamples(a, 15)) {
+    const html = sigs.extractSignature(m.html); if (!html) continue;
+    const key = sigs.toText(html).replace(/\s+/g, " ").slice(0, 200) + (html.match(/<img/g)?.length ?? 0); if (seen.has(key)) continue; seen.add(key);
+    found.push({ subject: m.subject, date: m.date, html }); if (found.length >= 4) break;
+  }
+  return { candidates: found };
 }));
 app.get("/api/outbox", h(async () => outbox.list()));
 app.delete("/api/outbox/:id", (req, res) => {

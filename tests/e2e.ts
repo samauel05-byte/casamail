@@ -651,6 +651,89 @@ await t("registro: si no se puede escribir (disco/permisos), NUNCA rompe la app"
   finally { process.env.CASAMAIL_HOME = prev; delete reqCjs.cache[reqCjs.resolve("../electron/log.cjs")]; }
 });
 
+console.log("\nFirmas con imagen (HTML) como en Outlook");
+{
+  const sg = await import("../src/signature.js");
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  store.addAccount(store.buildAccount({ id: "firmas", email: "yo@casa.test", pass: "secreto", user: "yo", imap: { host: "127.0.0.1", port: 1143, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } }));
+  const accF = store.getAccount("firmas");
+  const LOGO = `<table><tr><td><img src="data:image/png;base64,${PNG}" width="120" alt="Logo"></td><td style="font-family:Arial;color:#0a3d7c"><b>Sam Pérez</b><br>Director · <a href="https://casamail.test">casamail.test</a><br>+34 600 000 000</td></tr></table>`;
+
+  await t("limpieza: quita scripts, estilos, formularios, manejadores de eventos y enlaces peligrosos; conserva tablas, colores, enlaces e imágenes", async () => {
+    const dirty = `<div onclick="x()" style="color:red;background:url(javascript:alert(1));position:fixed"><script>alert(1)</script><style>body{}</style><iframe src="https://evil"></iframe><a href="javascript:alert(1)">malo</a><a href="https://ok.test/x" onmouseover="y()">bueno</a><img src="javascript:alert(1)"><img src="https://logo.test/a.png" onerror="z()" alt="a"><img src="data:image/svg+xml;base64,PHN2Zz4="><table><tr><td bgcolor="#fff">celda</td></tr></table><form action="x"><input value="q"></form></div>`;
+    const c = sg.sanitize(dirty);
+    ok(!/script|<style|iframe|onclick|onmouseover|onerror|javascript:|position|<form|<input|svg/i.test(c), "quedó algo peligroso: " + c);
+    ok(c.includes('href="https://ok.test/x"') && c.includes('rel="noopener noreferrer"') && c.includes('src="https://logo.test/a.png"') && c.includes("<td bgcolor=\"#fff\">celda</td>") && c.includes("color:red"), "se perdió algo legítimo: " + c);
+    eq((c.match(/<img/g) ?? []).length, 1, "solo la imagen https es válida");
+    ok(sg.sanitize(`<img src="data:image/png;base64,${PNG}">`).includes("data:image/png;base64"), "las imágenes incrustadas PNG se conservan");
+    ok(!sg.sanitize(`<img src="https://x.test/a.png">`, { images: false }).includes("<img"), "al citar un mensaje ajeno no se conservan imágenes");
+  });
+  await t("texto plano de la firma: saltos de línea, tablas y enlaces", async () => {
+    const t1 = sg.toText(LOGO); ok(t1.includes("Sam Pérez") && t1.includes("Director") && t1.includes("+34 600 000 000") && !t1.includes("<"), t1);
+    eq(sg.toText('<p>Hola</p><p>Mundo</p>'), "Hola\n\nMundo".replace("\n\n", "\n")); ok(sg.toText('<a href="https://x.test/a">Mi web</a>').includes("Mi web (https://x.test/a)"), "el enlace conserva su dirección");
+  });
+  await t("guardar y elegir: principal para mensajes nuevos, otra para respuestas, 'ninguna', y se limpia al guardar", async () => {
+    eq(sg.pick("firmas", undefined, false), null, "sin firmas: nada");
+    const s = sg.save("firmas", { items: [{ id: "principal", name: "Principal", html: LOGO + "<script>x</script>", text: "" }, { id: "corta", name: "Corta", html: "<div>Sam</div>", text: "" }], newDefault: "principal", replyDefault: "corta" });
+    eq(s.items.map((x) => x.name), ["Principal", "Corta"]); ok(!s.items[0].html.includes("script") && s.items[0].text.includes("Sam Pérez"), "se limpia y se deriva el texto");
+    eq(sg.pick("firmas", undefined, false)!.id, "principal"); eq(sg.pick("firmas", undefined, true)!.id, "corta"); eq(sg.pick("firmas", "corta", false)!.id, "corta"); eq(sg.pick("firmas", "", false), null); eq(sg.pick("firmas", "no-existe", false), null);
+    eq(sg.save("firmas", { items: s.items, newDefault: "borrada", replyDefault: "" }).newDefault, "principal", "un predeterminado inválido vuelve a la primera");
+    sg.save("firmas", { items: s.items, newDefault: "principal", replyDefault: "corta" });
+  });
+  await t("la firma de texto antigua (Ajustes → Firma) sigue funcionando como una firma más", async () => {
+    store.saveSettings({ ...store.getSettings(), signatures: { vieja: "Un saludo,\nSam" } }); const s = sg.forAccount("vieja"); eq(s.items.length, 1); eq(s.items[0].text, "Un saludo,\nSam"); eq(s.newDefault, s.items[0].id);
+    store.saveSettings({ ...store.getSettings(), signatures: {} });
+  });
+  await t("componer: el texto lleva '-- ' + firma; el HTML lleva la firma con la imagen como adjunto incrustado (cid), una sola vez aunque se repita", async () => {
+    const out = sg.withSignature({ to: "a@b.c", subject: "Hola", text: "Línea 1\n\nLínea 3 https://x.test" }, sg.pick("firmas", undefined, false));
+    ok(out.text!.startsWith("Línea 1") && out.text!.includes("\n\n-- \nSam Pérez"), out.text!);
+    ok(out.html!.includes("Línea 1<br><br>Línea 3") && out.html!.includes('<a href="https://x.test">') && out.html!.includes("Sam Pérez"), out.html!);
+    const cids = out.attachments!.filter((a) => a.cid); eq(cids.length, 1); ok(out.html!.includes(`src="cid:${cids[0].cid}"`) && !out.html!.includes("data:image"), "la imagen debe ir por cid"); eq(cids[0].contentDisposition, "inline"); eq(cids[0].content, PNG);
+    const dos = sg.withSignature({ to: "a@b.c", subject: "x", text: "t" }, { id: "d", name: "d", html: `<img src="data:image/png;base64,${PNG}"><img src="data:image/png;base64,${PNG}">`, text: "" }); eq(dos.attachments!.filter((a) => a.cid).length, 1, "misma imagen = un solo adjunto");
+    const sin = sg.withSignature({ to: "a@b.c", subject: "x", text: "solo texto" }, null); eq(sin.html, undefined); eq(sin.text, "solo texto"); ok(!sin.attachments, "sin firma el mensaje queda igual (texto plano)");
+    const conAdj = sg.withSignature({ to: "a@b.c", subject: "x", text: "t", attachments: [{ filename: "a.txt", content: "aG9sYQ==", encoding: "base64" }] }, sg.pick("firmas", undefined, false)); eq(conAdj.attachments!.length, 2, "los adjuntos del usuario se conservan");
+  });
+  await t("de punta a punta por SMTP: el destinatario recibe HTML con el logo incrustado (cid), el texto alternativo y el adjunto del usuario", async () => {
+    const n0 = sentMails.length; await mail.sendMessage(accF, sg.withSignature({ to: "ana@empresa.com", subject: "Con firma", text: "Hola Ana,\nTe escribo con mi firma.", attachments: [{ filename: "datos.txt", content: Buffer.from("datos").toString("base64"), encoding: "base64" }] }, sg.pick("firmas", undefined, false)));
+    const m = sentMails[n0]; ok(m, "no llegó"); ok(m.html && m.html.includes("Hola Ana,<br>Te escribo") && m.html.includes("Sam Pérez") && /<img src="data:image\/png/.test(m.html as string), String(m.html)); // (mailparser muestra las imágenes cid como data: al leerlas)
+    ok(m.text!.includes("-- \nSam Pérez"), "texto: " + m.text);
+    const logo = m.attachments.find((a) => a.contentType === "image/png"); ok(logo && logo.cid && logo.contentDisposition === "inline" && logo.related === true, "el logo viaja como imagen incrustada (cid, inline, related): " + JSON.stringify({ cid: logo?.cid, d: logo?.contentDisposition, r: logo?.related })); eq(logo!.content.toString("base64"), PNG);
+    ok(m.attachments.some((a) => a.filename === "datos.txt"), "el adjunto del usuario sigue ahí");
+  });
+  await t("responder: la firma va ENTRE la respuesta y el mensaje citado (como Outlook), en HTML y en texto", async () => {
+    { const { ImapFlow: IF } = await import("imapflow"); const c = new IF({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await c.connect();
+      await c.append("INBOX", await new MailComposer({ from: "Ana Pérez <ana@empresa.com>", to: "yo@casa.test", subject: "Presupuesto de firmas", text: "Hola, adjunto el presupuesto de marzo.\nSaludos", messageId: "<firmas-1@x>", date: new Date() }).compile().build(), []); await c.logout(); mail.dropConnection("firmas"); }
+    const inbox = (await mail.listMessages(accF, "INBOX", { limit: 20 })).messages.find((x) => x.subject === "Presupuesto de firmas")!, orig = await mail.getMessage(accF, "INBOX", inbox.uid, false), word = orig.text.trim().split(/\s+/)[0]; const n0 = sentMails.length;
+    await mail.replyTo(accF, "INBOX", inbox.uid, { text: "Confirmado, gracias." }, sg.pick("firmas", undefined, true)); const m = sentMails[n0];
+    const t = m.text!, h = m.html as string; ok(t.indexOf("Confirmado") < t.indexOf("-- \nSam") && t.indexOf("-- \nSam") < t.indexOf("escribió:") && t.includes("> " + orig.text.split("\n")[0]), t);
+    ok(h.indexOf("Confirmado") < h.indexOf("Sam") && h.indexOf("Sam") < h.indexOf("escribió:") && h.includes("<blockquote") && h.includes(word), h);
+    eq(m.subject, /^re:/i.test(orig.subject) ? orig.subject : "Re: " + orig.subject); ok(!!m.inReplyTo, "el hilo se conserva");
+    const n1 = sentMails.length; await mail.replyTo(accF, "INBOX", inbox.uid, { text: "Sin firma" }, null); eq(sentMails[n1].html, false, "sin firma sigue siendo texto plano"); ok(sentMails[n1].text!.includes("> " + orig.text.split("\n")[0]), "y cita igual");
+  });
+
+  console.log("  — importar la firma desde un correo enviado");
+  const outlook = `<html><body><div><p class=MsoNormal>Hola Ana, adjunto el contrato. Dime algo.</p><p class=MsoNormal>Gracias</p><p class=MsoNormal>&nbsp;</p><p class=MsoNormal><b>Sam Pérez</b></p><p class=MsoNormal>Director comercial</p><p class=MsoNormal><img src="data:image/png;base64,${PNG}" width=140 alt="Logo"></p><p class=MsoNormal>+34 600 000 000</p><div id="divRplyFwdMsg"><hr><p>De: Ana</p></div><blockquote>Mensaje anterior larguísimo con otra <img src="data:image/png;base64,${PNG}"></blockquote></div></body></html>`;
+  await t("Outlook de escritorio (sin marcas): toma el bloque final con el logo y sus líneas (nombre, cargo) y NO el texto del correo ni lo citado", async () => {
+    const s = sg.extractSignature(outlook)!; ok(s, "no encontró nada"); ok(s.includes("Sam Pérez") && s.includes("Director comercial") && s.includes("<img") && s.includes("+34 600"), s); ok(!s.includes("adjunto el contrato") && !s.includes("Mensaje anterior") && !s.includes("De: Ana"), "se coló texto que no es firma: " + s);
+  });
+  await t("webmail y otros: Roundcube, Thunderbird, Gmail y el separador '-- '", async () => {
+    const rc = sg.extractSignature(`<html><body><p>Hola</p><div id="_rc_sig"><div>--</div><b>Sam</b><br><img src="https://logo.test/l.png"></div></body></html>`)!; ok(rc.includes("Sam") && rc.includes("logo.test") && !rc.includes("Hola"), rc);
+    const tb = sg.extractSignature(`<html><body><p>Texto del correo</p><div class="moz-signature">-- <br><b>Sam</b><br>Tel 123</div></body></html>`)!; ok(tb.includes("Sam") && tb.includes("Tel 123") && !tb.includes("Texto del correo"), tb);
+    const gm = sg.extractSignature(`<div dir="ltr">Cuerpo<br><div class="gmail_signature"><div>Sam<br><img src="https://l.test/a.png"></div></div></div><div class="gmail_quote">citado</div>`)!; ok(gm.includes("Sam") && !gm.includes("citado") && !gm.includes("Cuerpo"), gm);
+    const dash = sg.extractSignature(`<html><body><p>Cuerpo del mensaje</p><p>-- </p><p>Sam Pérez</p><p>Tel 555</p></body></html>`)!; ok(dash.includes("Sam Pérez") && !dash.includes("Cuerpo"), dash);
+  });
+  await t("un correo sin firma no inventa una; y lo que se importa siempre sale limpio", async () => {
+    eq(sg.extractSignature(`<html><body><p>Hola</p><p>Esto es todo el mensaje, sin firma ni logo.</p><p>Hasta luego</p></body></html>`), null);
+    const x = sg.extractSignature(`<div id="Signature"><script>alert(1)</script><b onclick="x()">Sam</b><img src="https://l.test/a.png" onerror="y()"></div>`)!; ok(x.includes("Sam") && !/script|onclick|onerror/.test(x), x);
+  });
+  await t("desde la carpeta Enviados: lee los correos que enviaste (imágenes cid → incrustadas) y encuentra la firma con su logo", async () => {
+    const samples = await mail.sentSamples(accF, 10); ok(samples.length >= 1, "no leyó Enviados"); const s = samples.find((x) => x.subject === "Con firma")!; ok(s && s.html.includes("data:image/png;base64") && !s.html.includes("cid:"), "las imágenes cid deben convertirse: " + (s?.html ?? "").slice(0, 300));
+    const sig = sg.extractSignature(s.html)!; ok(sig && sig.includes("Sam Pérez") && sig.includes("<img") && !sig.includes("Hola Ana"), "firma extraída: " + sig);
+    const again = sg.withSignature({ to: "a@b.c", subject: "x", text: "t" }, { id: "i", name: "Importada", html: sig, text: sg.toText(sig) }); ok(again.attachments!.some((a) => a.cid), "la firma importada vuelve a salir con su logo");
+  });
+  store.removeAccount("firmas");
+}
+
 console.log("\nAvisos: correo nuevo con resumen, reuniones y recordatorios");
 {
   const notify = await import("../src/notify.js"); const cal = await import("../src/calendar.js"); const { ImapFlow } = await import("imapflow");
