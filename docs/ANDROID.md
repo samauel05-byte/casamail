@@ -34,6 +34,12 @@ Alternativas: Cloudflare Tunnel o un proxy inverso con certificado propio. **No 
 
 Abre CasaMail en el móvil → pega el **enlace completo** (`https://mi-pc.tu-red.ts.net/?t=CLAVE`) en la primera casilla → *Conectar*. La app guarda la dirección y la clave solo en el teléfono (sin copia de seguridad en la nube).
 
+## Avisos en el móvil
+La app muestra notificaciones de **correo nuevo** (con resumen), **invitaciones**, **agenda de la mañana** y **recordatorios de reuniones** (ver `docs/AVISOS.md`). Android 13+ te pedirá permiso.
+- Se consulta a tu CasaMail cada ~15 minutos (mínimo de Android sin Firebase), así que un correo puede avisar con ese retraso, o más con el móvil en ahorro de batería.
+- Los recordatorios de reuniones se programan en el móvil con alarmas y llegan a su hora.
+- Si tu CasaMail está apagado o sin conexión, no hay avisos.
+
 ## Qué funciona y qué no
 
 | | |

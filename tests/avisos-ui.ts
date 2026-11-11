@@ -1,0 +1,37 @@
+// Avisos en la interfaz: llegada en tiempo real, campana, agendar, calendario y ajustes. Uso: PW_PATH=... npx tsx tests/avisos-ui.ts
+import fs from "node:fs"; import os from "node:os"; import path from "node:path"; import { spawn } from "node:child_process";
+process.env.CASAMAIL_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "cm-uiav-"));
+const { startImap, startSmtp, startFakeAi } = await import("./servers.js");
+const store = await import("../src/store.js");
+const { ImapFlow } = await import("imapflow");
+const MailComposer = (await import("nodemailer/lib/mail-composer/index.js")).default;
+const { chromium } = await import(process.env.PW_PATH ?? "playwright");
+startImap(); startSmtp(); startFakeAi(); await new Promise((r) => setTimeout(r, 400));
+store.addAccount(store.buildAccount({ id: "casa", email: "yo@casa.test", pass: "secreto", user: "yo", imap: { host: "127.0.0.1", port: 1143, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } }));
+store.saveAiConfig({ provider: "openai", baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" });
+const web = spawn("node", ["--import", "tsx", "src/web.ts"], { env: { ...process.env, PORT: "8079", CASAMAIL_TOKEN: "tok", CASAMAIL_NO_OPEN: "1", CASAMAIL_NO_WARMUP: "1", CASAMAIL_NOTIFY_EVERY_MS: "1500" }, stdio: "inherit" });
+process.on("exit", () => web.kill());
+await new Promise((r) => setTimeout(r, 4000));
+const b = await chromium.launch(); const ctx = await b.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+const pg = await ctx.newPage(); pg.setDefaultTimeout(15000); pg.on("dialog", (d) => d.accept()); const errs: string[] = []; pg.on("pageerror", (e) => errs.push(e.message));
+await pg.goto("http://127.0.0.1:8079/?t=tok"); await pg.waitForSelector(".m"); await pg.waitForTimeout(2500); // la primera vuelta fija la base
+const ok = (c: unknown, m: string) => { console.log(c ? "  ✔" : "  ✘", m); if (!c) process.exitCode = 1; };
+const c = new ImapFlow({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await c.connect();
+const fut = Date.now() + 3 * 864e5, D = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+const ics = ["BEGIN:VCALENDAR", "VERSION:2.0", "METHOD:REQUEST", "BEGIN:VEVENT", "UID:ui-1", `DTSTART:${D(fut)}`, `DTEND:${D(fut + 3600_000)}`, "SUMMARY:Revisión trimestral", "LOCATION:Sala Madrid", "DESCRIPTION:https://meet.google.com/abc-defg-hij", "END:VEVENT", "END:VCALENDAR"].join("\r\n");
+await c.append("INBOX", await new MailComposer({ from: "Marta Ruiz <marta@estudio.es>", to: "yo@casa.test", subject: "Invitación: Revisión trimestral", text: "Os invito a la revisión.", icalEvent: { method: "REQUEST", content: ics }, messageId: "<ui1@x>" }).compile().build(), []);
+await pg.waitForSelector(".toast", { timeout: 20000 }); ok(true, "llega un aviso en pantalla sin recargar");
+await pg.waitForFunction(() => document.querySelector("#bdg")!.textContent === "2", null, { timeout: 8000 }); ok(true, "la campana cuenta 2 avisos (correo + reunión)");
+await pg.click("#bell"); await pg.waitForSelector("#npanel .nrow"); await pg.waitForTimeout(500); await pg.screenshot({ path: "/tmp/shots-n/1-panel.png" });
+ok((await pg.locator("#npanel .nrow").count()) === 2, "el panel lista los dos avisos");
+ok((await pg.textContent("#npanel")!)!.includes("Revisión trimestral"), "muestra la reunión detectada");
+await pg.click('#npanel [data-a="agendar"]'); await pg.waitForSelector("#evt"); await pg.waitForTimeout(500); await pg.screenshot({ path: "/tmp/shots-n/2-agendar.png" });
+await pg.fill("#evt", "Revisión Q4"); await pg.click("#evok"); await pg.click("#bell"); await pg.waitForSelector("#npanel .ok"); ok(true, "al agendar el aviso pasa a 'Agendada'");
+await pg.click("#npanel [data-a=cal]");
+await pg.waitForSelector(".calev"); await pg.waitForTimeout(500); await pg.screenshot({ path: "/tmp/shots-n/3-calendario.png" }); ok((await pg.textContent("#calist"))!.includes("Revisión Q4") && (await pg.textContent("#calist"))!.includes("Sala Madrid"), "el calendario muestra la reunión con su lugar");
+await pg.click("#cx"); await pg.click("#cfg"); await pg.click('[data-tab="avisos"]'); await pg.waitForSelector(".swrow"); await pg.waitForTimeout(500); await pg.screenshot({ path: "/tmp/shots-n/4-ajustes.png" });
+await pg.uncheck('[data-r="10"]'); await pg.waitForTimeout(400); const s = await (await ctx.request.get("http://127.0.0.1:8079/api/notify/settings")).json(); ok(!s.reminders.includes(10) && s.reminders.includes(60), "cambiar un recordatorio se guarda: " + s.reminders);
+await pg.click("#mx"); await pg.locator(".m").first().click(); await pg.waitForSelector("#agm"); ok(true, "el mensaje abierto tiene el botón 'Agendar reunión'");
+const m = await b.newContext({ viewport: { width: 390, height: 800 }, deviceScaleFactor: 2, isMobile: true }); const mp = await m.newPage(); await mp.goto("http://127.0.0.1:8079/?t=tok"); await mp.waitForSelector(".m"); await mp.click("#bell"); await mp.waitForSelector("#npanel .nrow"); await mp.waitForTimeout(500); await mp.screenshot({ path: "/tmp/shots-n/5-movil.png" });
+ok(!errs.length, "sin errores de JavaScript " + errs.join(" | "));
+await b.close(); web.kill(); process.exit(process.exitCode ?? 0);

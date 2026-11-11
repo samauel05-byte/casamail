@@ -76,6 +76,13 @@ export function startFakeAi(port = 1199) {
         return reply({ content: "Encontré el presupuesto de Ana (4.500 EUR) y dejé un borrador de confirmación." });
       }
       if (/Responde solo con la palabra OK/.test(sys)) return reply({ content: "OK" });
+      if (/notificaci[oó]n del m[oó]vil/.test(sys)) return reply({ content: "Ana pide confirmar el presupuesto antes del viernes." }); // resumen corto para avisos
+      if (/"reunion":true\|false/.test(sys)) {                                                                                      // detección de reuniones en el texto
+        const body = last?.content ?? "";
+        if (!/REUNION-IA/.test(body)) return reply({ content: '{"reunion":false}' });
+        const d = new Date(Date.now() + 864e5), p2 = (n: number) => String(n).padStart(2, "0");
+        return reply({ content: "```json\n" + JSON.stringify({ reunion: true, titulo: "Seguimiento del proyecto", fecha: `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`, hora: "15:30", duracion_min: 45, lugar: "Sala 2" }) + "\n```" });
+      }
       if (/Resume/.test(sys)) return reply({ content: "Resumen: Ana pide confirmar el presupuesto.\nAcciones pendientes\n- Confirmar antes del viernes" });
       if (/Redactas/.test(sys)) return reply({ content: '```json\n{"subject":"Reunión","body":"Hola, ¿nos vemos mañana?"}\n```' });
       if (/3 respuestas/.test(sys)) return reply({ content: '[{"label":"Confirmar","body":"Confirmado."},{"label":"Preguntar","body":"¿Puedes detallar?"},{"label":"Declinar","body":"No podré."}]' });

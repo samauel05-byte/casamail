@@ -19,8 +19,8 @@ const check = (name: string, c: boolean) => { console.log(c ? "  ✔" : "  ✘",
 const packaged = process.argv[2];
 const root = path.resolve(import.meta.dirname, "..");
 const launch = () => electron.launch(packaged
-  ? { executablePath: packaged, args: ["--no-sandbox"], env: { ...process.env, CASAMAIL_HOME: HOME } as Record<string, string> }
-  : { executablePath: path.join(root, "node_modules/electron/dist/electron"), args: ["--no-sandbox", root], cwd: root, env: { ...process.env, CASAMAIL_HOME: HOME } as Record<string, string> });
+  ? { executablePath: packaged, args: ["--no-sandbox"], env: { ...process.env, CASAMAIL_HOME: HOME, CASAMAIL_NOTIFY_EVERY_MS: "1500" } as Record<string, string> }
+  : { executablePath: path.join(root, "node_modules/electron/dist/electron"), args: ["--no-sandbox", root], cwd: root, env: { ...process.env, CASAMAIL_HOME: HOME, CASAMAIL_NOTIFY_EVERY_MS: "1500" } as Record<string, string> });
 
 const app = await launch();
 const win = await app.firstWindow();
@@ -130,6 +130,16 @@ await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0].clo
 await new Promise((r) => setTimeout(r, 800));
 const visible = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().filter((w) => w.isVisible()).length);
 check("al cerrar la ventana la app sigue en segundo plano", visible === 0 && fs.existsSync(path.join(HOME, "scheduler.lock")));
+// con la ventana cerrada, un correo nuevo sigue generando una notificación del sistema
+{
+  const { ImapFlow } = await import("imapflow"); const MailComposer = (await import("nodemailer/lib/mail-composer/index.js")).default;
+  store.addAccount(store.buildAccount({ id: "avisos", email: "yo@casa.test", pass: "secreto", user: "yo", imap: { host: "127.0.0.1", port: 1143, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } })); // (la cuenta "t" quedó conectada a Google por las pruebas de OAuth)
+  await new Promise((r) => setTimeout(r, 4000)); // la primera vuelta toma nota de lo que ya había
+  const c = new ImapFlow({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await c.connect();
+  await c.append("INBOX", await new MailComposer({ from: "Marta <marta@estudio.es>", to: "yo@casa.test", subject: "Aviso con la ventana cerrada", text: "hola", date: new Date(), messageId: "<desk-aviso@x>" }).compile().build(), []); await c.logout();
+  let seen = false; for (let i = 0; i < 40 && !seen; i++) { await new Promise((r) => setTimeout(r, 500)); seen = logText().includes("Aviso nativo: mail"); }
+  check("con la ventana cerrada, un correo nuevo muestra una notificación del sistema (y el registro no guarda su contenido)", seen && !logText().includes("Aviso con la ventana cerrada"));
+}
 await app.evaluate(({ app: a }) => { a.quit(); });
 await new Promise((r) => setTimeout(r, 2500));
 check("'Salir' cierra el servidor y suelta el candado", !fs.existsSync(path.join(HOME, "scheduler.lock")));

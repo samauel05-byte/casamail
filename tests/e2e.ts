@@ -628,6 +628,174 @@ await t("registro: si no se puede escribir (disco/permisos), NUNCA rompe la app"
   finally { process.env.CASAMAIL_HOME = prev; delete reqCjs.cache[reqCjs.resolve("../electron/log.cjs")]; }
 });
 
+console.log("\nAvisos: correo nuevo con resumen, reuniones y recordatorios");
+{
+  const notify = await import("../src/notify.js"); const cal = await import("../src/calendar.js"); const { ImapFlow } = await import("imapflow");
+  for (const a of store.loadAccounts()) store.removeAccount(a.id); // solo la cuenta de esta sección (comparten el buzón de pruebas)
+  store.addAccount(store.buildAccount({ id: "avisos", email: "yo@casa.test", pass: "secreto", user: "yo", imap: { host: "127.0.0.1", port: 1143, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } }));
+  const accN = store.getAccount("avisos");
+  const D = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const seedC = new ImapFlow({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await seedC.connect();
+  let n = 0;
+  const deliver = async (o: { from?: string; subject: string; text: string; ics?: string; method?: string }) => {
+    const raw = await new MailComposer({ from: o.from ?? "Marta Ruiz <marta@estudio.es>", to: "yo@casa.test", subject: o.subject, text: o.text, date: new Date(), messageId: `<av${++n}-${Date.now()}@x>`, ...(o.ics ? { icalEvent: { method: o.method ?? "REQUEST", content: o.ics } } : {}) }).compile().build();
+    await seedC.append("INBOX", raw, []);
+  };
+  const ics = (o: { uid: string; start: string; end?: string; summary: string; extra?: string; method?: string; startParams?: string }) =>
+    ["BEGIN:VCALENDAR", "VERSION:2.0", `METHOD:${o.method ?? "REQUEST"}`, "BEGIN:VEVENT", `UID:${o.uid}`, `DTSTAMP:20260101T000000Z`, `DTSTART${o.startParams ?? ""}:${o.start}`, ...(o.end ? [`DTEND:${o.end}`] : []), `SUMMARY:${o.summary}`, ...(o.extra ? [o.extra] : []), "END:VEVENT", "END:VCALENDAR"].join("\r\n");
+  const check = async () => { const before = notify.list().last; const k = await notify.checkMail(); return { k, items: notify.list(before).items.reverse() }; };
+  const e0 = { provider: "openai" as const, baseUrl: "http://127.0.0.1:1199/v1", apiKey: "", model: "x" };
+  store.saveAiEngines([e0]);
+
+  await t("ajustes: valores por defecto, y se corrigen avisos o hora fuera de rango", async () => {
+    const d = notify.getSettings(); eq([d.enabled, d.mail, d.meetings, d.autoAgenda, d.reminders, d.digestHour], [true, true, true, false, [1440, 60, 10], 8]);
+    const c = notify.saveSettings({ reminders: [10, 10, 99999, -5, 60, 2.5, 1440] as number[], digestHour: 99 }); eq(c.reminders, [1440, 60, 10]); eq(c.digestHour, 23);
+    notify.saveSettings({ reminders: [1440, 60, 10], digestHour: 8 });
+  });
+  await t("la primera vez NO avisa de los correos que ya estaban (solo toma nota)", async () => { const r = await check(); eq(r.k, 0); eq(r.items.length, 0); });
+  await t("llega un correo → aviso con quién escribe, el asunto y un resumen de la IA; el correo sigue SIN LEER", async () => {
+    await deliver({ subject: "Presupuesto marzo (aviso)", text: "Hola, adjunto el presupuesto de marzo: 4.500 EUR. ¿Puedes confirmar antes del viernes?" });
+    const r = await check(); eq(r.items.length, 1); const x = r.items[0];
+    eq(x.kind, "mail"); eq(x.title, "Marta Ruiz"); ok(x.body.includes("Presupuesto marzo (aviso)"), x.body); ok(x.body.includes("antes del viernes"), "falta el resumen de la IA: " + x.body);
+    eq(x.account, "avisos"); eq(x.read, false);
+    const m = await mail.listMessages(accN, "INBOX", { limit: 5 }); ok(m.messages.find((q) => q.subject === "Presupuesto marzo (aviso)")!.unread, "el aviso NO debe marcar el correo como leído");
+  });
+  await t("el mismo correo no se avisa dos veces", async () => { const r = await check(); eq(r.k, 0); });
+  await t("sin motor de IA conectado: el aviso lleva el comienzo del texto (no falla ni se pierde)", async () => {
+    store.saveAiEngines([]); await deliver({ subject: "Sin IA", text: "Hola Sam,\n> texto citado que no importa\nTe escribo para confirmar la entrega del paquete. Mira https://ejemplo.com/muy/largo" });
+    const r = await check(); store.saveAiEngines([e0]); eq(r.items.length, 1);
+    ok(r.items[0].body.includes("Te escribo para confirmar la entrega") && !r.items[0].body.includes("texto citado") && !r.items[0].body.includes("https://"), r.items[0].body);
+  });
+  await t("tus propios correos no generan aviso", async () => { await deliver({ from: "Yo <yo@casa.test>", subject: "Nota para mí", text: "recordatorio" }); eq((await check()).items.length, 0); });
+  await t("si llegan muchos de golpe: 5 avisos individuales y uno que resume el resto", async () => {
+    for (let i = 0; i < 8; i++) await deliver({ subject: `Lote ${i}`, text: "x" });
+    const r = await check(); eq(r.items.length, 6); ok(r.items.at(-1)!.body.includes("3 correos más"), r.items.at(-1)!.body);
+  });
+
+  const fut = Date.now() + 3 * 864e5 + 5 * 3600_000; // dentro de ~3 días
+  await t("invitación (.ics) → aviso 'Te invitan a una reunión' con título, hora, lugar y enlace; NO se agenda sola", async () => {
+    await deliver({ subject: "Invitación: Revisión trimestral", text: "Os invito.", ics: ics({ uid: "rev-1@x", start: D(fut), end: D(fut + 3600_000), summary: "Revisión trimestral", extra: "LOCATION:Sala Madrid\r\nDESCRIPTION:Entrar: https://meet.google.com/abc-defg-hij" }) });
+    const r = await check(); const m = r.items.find((x) => x.kind === "meeting")!; ok(m, "sin aviso de reunión: " + JSON.stringify(r.items.map((x) => x.kind)));
+    eq(m.title, "Te invitan a una reunión"); eq(m.proposal!.via, "ics"); eq(m.proposal!.start, Math.floor(fut / 1000) * 1000); eq(m.proposal!.location, "Sala Madrid"); eq(m.proposal!.link, "https://meet.google.com/abc-defg-hij"); eq(m.proposal!.status, "pending");
+    eq(cal.listEvents().length, 0, "no debe agendar sin permiso");
+  });
+  await t("'Agendar' crea el evento en el calendario; los avisos ya pasados no se disparan de golpe; repetir no duplica", async () => {
+    const m = notify.list().items.find((x) => x.kind === "meeting" && x.proposal?.icsUid === "rev-1@x")!;
+    const ev = notify.agendarAviso(m.id); eq(ev.title, "Revisión trimestral"); eq(cal.listEvents().length, 1); eq(notify.get(m.id)!.proposal!.status, "added");
+    eq(ev.reminded, [], "faltan >24 h: ningún aviso pendiente se da por hecho"); const again = notify.agendarAviso(m.id); eq(again.id, ev.id); eq(cal.listEvents().length, 1);
+  });
+  await t("corregir título/hora antes de agendar", async () => {
+    await deliver({ subject: "Llamada", text: "x", ics: ics({ uid: "ll-1@x", start: D(fut + 864e5), end: D(fut + 864e5 + 1800_000), summary: "Llamada" }) }); await check();
+    const m = notify.list().items.find((x) => x.proposal?.icsUid === "ll-1@x")!; const ev = notify.agendarAviso(m.id, { title: "Llamada con Marta", start: fut + 2 * 864e5 }); eq(ev.title, "Llamada con Marta"); eq(ev.start, fut + 2 * 864e5);
+  });
+  await t("cancelación (METHOD:CANCEL) → la reunión se quita del calendario y se avisa", async () => {
+    const before = cal.listEvents().length; await deliver({ subject: "Cancelada: Revisión trimestral", text: "Se cancela.", method: "CANCEL", ics: ics({ uid: "rev-1@x", start: D(fut), summary: "Revisión trimestral", method: "CANCEL" }) });
+    const r = await check(); ok(r.items.some((x) => x.title === "Reunión cancelada"), JSON.stringify(r.items.map((x) => x.title))); eq(cal.listEvents().length, before - 1);
+  });
+  await t("una invitación de una reunión que ya pasó se ignora", async () => {
+    const past = Date.now() - 5 * 864e5; await deliver({ subject: "Acta de ayer", text: "x", ics: ics({ uid: "old@x", start: D(past), end: D(past + 3600_000), summary: "Vieja" }) });
+    eq((await check()).items.filter((x) => x.kind === "meeting").length, 0);
+  });
+  await t("agenda automática: con la opción activada, las invitaciones .ics se agendan solas (y avisa)", async () => {
+    notify.saveSettings({ autoAgenda: true }); const before = cal.listEvents().length;
+    await deliver({ subject: "Taller", text: "x", ics: ics({ uid: "auto@x", start: D(fut + 5 * 864e5), end: D(fut + 5 * 864e5 + 3600_000), summary: "Taller de equipo" }) });
+    const r = await check(); notify.saveSettings({ autoAgenda: false }); eq(cal.listEvents().length, before + 1); ok(r.items.some((x) => x.title === "Reunión agendada" && x.proposal?.status === "added"), "sin aviso");
+  });
+  await t("sin invitación: Yerleny lee el texto y propone la reunión (a revisar), con día/hora resueltos", async () => {
+    await deliver({ subject: "Seguimiento", text: "REUNION-IA ¿Nos vemos mañana a las 15:30 en la sala 2 para revisar el proyecto?" });
+    const r = await check(); const m = r.items.find((x) => x.kind === "meeting")!; ok(m, "no detectó la reunión");
+    eq(m.proposal!.via, "ia"); eq(m.title, "Posible reunión en este correo"); ok(m.body.includes("revisa la hora"), m.body); eq(m.proposal!.end - m.proposal!.start, 45 * 60_000);
+    eq(cal.hourOf(m.proposal!.start), 15); eq(cal.timeText(m.proposal!.start), "15:30"); eq(cal.dayKey(m.proposal!.start), cal.dayKey(Date.now() + 864e5));
+  });
+  await t("un correo sin reunión no genera aviso de reunión (y no gasta IA si no hay palabras clave)", async () => {
+    const calls = fakeStats.total; await deliver({ subject: "Factura", text: "Tu factura de noviembre está disponible." });
+    const r = await check(); eq(r.items.filter((x) => x.kind === "meeting").length, 0); ok(fakeStats.total - calls <= 1, "solo el resumen del aviso, sin detección: " + (fakeStats.total - calls));
+  });
+  await t("'quedamos algún día' (sin día ni hora) no inventa una cita", async () => {
+    await deliver({ subject: "Quedamos", text: "A ver si quedamos algún día para tomar un café, sin prisa." }); eq((await check()).items.filter((x) => x.kind === "meeting").length, 0);
+  });
+  await t("desde un mensaje abierto: 'Agendar reunión' detecta la invitación y la IA", async () => {
+    const msgs = (await mail.listMessages(accN, "INBOX", { limit: 40 })).messages;
+    const inv = msgs.find((x) => x.subject === "Invitación: Revisión trimestral")!, full = await mail.getMessage(accN, "INBOX", inv.uid, false);
+    const d = await notify.detectMeeting(accN, "INBOX", full); eq(d?.kind, "event"); if (d?.kind === "event") eq(d.proposal.title, "Revisión trimestral");
+  });
+
+  console.log("  — calendario (.ics)");
+  await t("ICS: hora UTC, hora con zona (horario de invierno y de verano), todo el día, texto con comas/saltos y líneas plegadas", async () => {
+    const t1 = cal.parseIcs(ics({ uid: "a", start: "20301115T100000", startParams: ";TZID=Europe/Madrid", end: "20301115T110000", summary: "Invierno" })).events[0]; eq(new Date(t1.start).toISOString(), "2030-11-15T09:00:00.000Z");
+    const t2 = cal.parseIcs(ics({ uid: "b", start: "20300715T100000", startParams: ";TZID=Europe/Madrid", summary: "Verano" })).events[0]; eq(new Date(t2.start).toISOString(), "2030-07-15T08:00:00.000Z"); eq(t2.end - t2.start, 3600_000, "sin DTEND: 1 hora");
+    const t3 = cal.parseIcs(ics({ uid: "c", start: "20300301", startParams: ";VALUE=DATE", summary: "Día libre" })).events[0]; eq(t3.allDay, true); eq(t3.end - t3.start, 864e5);
+    const t4 = cal.parseIcs("BEGIN:VEVENT\r\nUID:d\r\nDTSTART:20301115T100000Z\r\nSUMMARY:Hola\\, mundo\\; con\\nsalto\r\nDESCRIPTION:linea muy larga que se\r\n  parte en dos\r\nEND:VEVENT").events[0]; eq(t4.title, "Hola, mundo; con\nsalto"); ok(t4.notes!.includes("se parte en dos"), t4.notes!);
+    const t5 = cal.parseIcs(ics({ uid: "e", start: "20301115T100000Z", startParams: "", summary: "Zona rara" }).replace("DTSTART:", "DTSTART;TZID=W. Europe Standard Time:")).events[0]; ok(Number.isFinite(t5.start), "una zona desconocida no debe romper el análisis");
+    eq(cal.parseIcs("esto no es un calendario").events.length, 0);
+  });
+  await t("ICS: exportar y volver a leer da los mismos eventos", async () => {
+    const evs = cal.listEvents(); ok(evs.length >= 2, "faltan eventos"); const back = cal.parseIcs(cal.toIcs(evs)).events;
+    const sec = (ms: number) => Math.floor(ms / 1000) * 1000; // el formato .ics no guarda milisegundos
+    eq(back.map((e) => [e.title, e.start, e.end]), evs.map((e) => [e.title, sec(e.start), sec(e.end)]));
+    ok(cal.toIcs(evs).split("\r\n").every((l) => Buffer.byteLength(l) <= 75), "líneas de más de 75 bytes");
+  });
+
+  console.log("  — recordatorios");
+  const T = Date.now() + 10 * 864e5, mk = (title: string, start: number, extra: Partial<import("../src/calendar.js").CalEvent> = {}) => cal.addEvent({ title, start, end: start + 3600_000, allDay: false, via: "manual", ...extra }, [1440, 60, 10]).event;
+  await t("recordatorios: 1 día, 1 hora y 10 minutos antes — cada uno una sola vez, con título, hora y lugar", async () => {
+    const e = mk("Reunión de prueba", T, { location: "Sala 3", link: "https://zoom.us/j/123" }), before = notify.list().last, M = 60_000;
+    const run = (now: number) => notify.checkReminders(now, notify.getSettings());
+    eq(run(T - 1441 * M), 0); eq(run(T - 1439 * M), 1);
+    const r1 = notify.list(before).items[0]; eq(r1.kind, "reminder"); ok(r1.title.includes(cal.timeText(T)), r1.title); ok(r1.body.includes("Sala 3") && r1.body.includes("zoom.us"), r1.body); eq(r1.eventId, e.id);
+    eq(run(T - 1000 * M), 0, "no se repite"); eq(run(T - 59 * M), 1); eq(run(T - 58 * M), 0); eq(run(T - 9 * M), 1); ok(notify.list(before).items[0].title.startsWith("Reunión en 9 min"), notify.list(before).items[0].title);
+    eq(run(T + M), 0, "ya empezó: nada más"); eq(notify.list(before).items.length, 3);
+  });
+  await t("si CasaMail estuvo apagada, al volver da SOLO el aviso más cercano (no tres de golpe)", async () => {
+    const T2 = T + 864e5, e = mk("Reunión tras apagado", T2); const before = notify.list().last;
+    eq(notify.checkReminders(T2 - 5 * 60_000, notify.getSettings()), 1); eq(notify.list(before).items.length, 1); eq(notify.checkReminders(T2 - 4 * 60_000, notify.getSettings()), 0); ok(e.id, "");
+  });
+  await t("al crear una reunión próxima no se avisa al instante de recordatorios que ya habrían pasado", async () => {
+    const soon = Date.now() + 3 * 3600_000, e = mk("En 3 horas", soon); eq(e.reminded, [1440]); eq(notify.checkReminders(Date.now(), notify.getSettings()), 0);
+  });
+  await t("mover la reunión recalcula sus avisos", async () => {
+    const e = mk("La movida", T + 20 * 864e5); eq(e.reminded, []); const m = cal.updateEvent(e.id, { start: Date.now() + 2 * 3600_000 }, [1440, 60, 10]); eq(m.reminded, [1440]);
+  });
+  await t("reuniones de todo el día no dan recordatorio por horas (salen en la agenda de la mañana)", async () => {
+    const e = cal.addEvent({ title: "Festivo", start: T + 30 * 864e5, end: T + 31 * 864e5, allDay: true, via: "manual" }).event; eq(notify.checkReminders(e.start - 5 * 60_000, notify.getSettings()), 0);
+  });
+  await t("avisos desactivados → ni correo ni recordatorios", async () => {
+    notify.saveSettings({ enabled: false }); const before = notify.list().last; await deliver({ subject: "No avises", text: "x" }); await notify.tick(); eq(notify.list(before).items.length, 0); notify.saveSettings({ enabled: true });
+    const r = await check(); ok(r.items.some((x) => x.body.includes("No avises")), "al reactivar debería avisar de lo que llegó");
+  });
+
+  console.log("  — agenda de la mañana");
+  await t("a la hora elegida avisa de las reuniones de hoy y mañana, una sola vez al día", async () => {
+    for (const e of cal.listEvents()) cal.removeEvent(e.id);
+    const d = new Date(Date.now() + 40 * 864e5), y = d.getFullYear(), mo = d.getMonth() + 1, dd = d.getDate();
+    const w = (h: number, mi = 0, plus = 0) => cal.wallToMs(y, mo, dd + plus, h, mi);
+    mk("Café con Ana", w(11, 0)); mk("Comité", w(16, 30)); mk("Cena", w(21, 0, 1)); mk("Ya pasó", w(7, 15));
+    const before = notify.list().last, S = notify.getSettings();
+    eq(notify.checkDigest(w(7, 59), S), false, "antes de las 8:00 no");
+    eq(notify.checkDigest(w(8, 30), S), true); const x = notify.list(before).items[0]; eq(x.kind, "digest"); eq(x.title, "Hoy tienes 2 reuniones");
+    ok(x.body.includes("11:00 · Café con Ana") && x.body.includes("16:30 · Comité") && x.body.includes("Mañana:") && x.body.includes("21:00 · Cena") && !x.body.includes("Ya pasó"), x.body);
+    eq(notify.checkDigest(w(9, 0), S), false, "una sola vez al día");
+    eq(notify.checkDigest(w(8, 30, 1), S), true); ok(notify.list(before).items[0].title.startsWith("Hoy tienes 1"), notify.list(before).items[0].title);
+    eq(notify.checkDigest(w(8, 30, 5), S), false, "sin reuniones no molesta");
+    notify.saveSettings({ digest: false }); eq(notify.checkDigest(w(8, 30, 9), notify.getSettings()), false); notify.saveSettings({ digest: true });
+  });
+
+  console.log("  — entrega");
+  await t("entrega en tiempo real (long-poll y bus de eventos para las notificaciones nativas)", async () => {
+    const seen: string[] = []; const f = (x: { title: string }) => seen.push(x.title); notify.bus.on("notify", f);
+    const last = notify.list().last, w = notify.waitFor(last, 5000); setTimeout(() => notify.push({ kind: "system", title: "Llegó", body: "x" }), 100); const r = await w;
+    eq(r.items.map((x) => x.title), ["Llegó"]); eq(seen, ["Llegó"]); notify.bus.off("notify", f);
+    const t0 = Date.now(); eq((await notify.waitFor(notify.list().last, 300)).items.length, 0); ok(Date.now() - t0 >= 250, "debe esperar el tiempo indicado");
+    eq((await notify.waitFor(0, 5000)).items.length > 0, true, "si ya hay avisos nuevos responde sin esperar");
+  });
+  await t("marcar leídos, y el historial se limita a 200", async () => {
+    const u0 = notify.list().unread; ok(u0 > 0, "hay sin leer"); notify.markRead("all"); eq(notify.list().unread, 0);
+    for (let i = 0; i < 210; i++) notify.push({ kind: "system", title: "t" + i, body: "" }); eq(notify.list(0).items.length, 200);
+    notify.clearAll(); eq(notify.list(0).items.length, 0);
+  });
+  seedC.logout().catch(() => {}); mail.closeConnections();
+}
+
 console.log("\nModo remoto (app Android): seguridad");
 {
   const { spawn } = await import("node:child_process"); const httpm = await import("node:http");
@@ -652,6 +820,23 @@ console.log("\nModo remoto (app Android): seguridad");
     await t("tras 10 tokens equivocados se bloquea la IP (429), incluso con el token bueno", async () => {
       for (let i = 0; i < 10; i++) await get(8092, "casa.tail.ts.net", "/?t=mal" + i);
       eq((await get(8092, "casa.tail.ts.net", "/?t=" + TOK)).status, 429);
+    });
+    await t("la app Android usa Authorization: Bearer (sin cookie); una clave errónea no entra", async () => {
+      const get2 = (port: number, host: string, p: string, auth: string, method = "GET", body?: string) => new Promise<{ status: number; body: string; headers: Record<string, string | string[] | undefined> }>((res, rej) => { const q = httpm.request({ host: "127.0.0.1", port, path: p, method, headers: { host, authorization: auth, "x-forwarded-for": "198.51.100.7", ...(body ? { "content-type": "application/json" } : {}) } }, (x) => { let d = ""; x.on("data", (c) => (d += c)); x.on("end", () => res({ status: x.statusCode ?? 0, body: d, headers: x.headers })); }); q.on("error", rej); q.end(body); });
+      eq((await get2(8092, "casa.tail.ts.net", "/api/notifications", "Bearer " + TOK)).status, 200);
+      eq((await get2(8092, "casa.tail.ts.net", "/api/notifications", "Bearer " + "c".repeat(48))).status, 401);
+      eq((await get2(8092, "casa.tail.ts.net", "/api/notifications", "Basic " + TOK)).status, 401);
+      const test = await get2(8092, "casa.tail.ts.net", "/api/notifications/test", "Bearer " + TOK, "POST", "{}"); eq(test.status, 200);
+      const l = JSON.parse((await get2(8092, "casa.tail.ts.net", "/api/notifications?after=0", "Bearer " + TOK)).body); eq(l.items[0].title, "Prueba de aviso"); eq(l.unread, 1);
+      const waited = Date.now(); eq(JSON.parse((await get2(8092, "casa.tail.ts.net", `/api/notifications?after=${l.last}&wait=1`, "Bearer " + TOK)).body).items.length, 0); ok(Date.now() - waited >= 900, "el long-poll debe esperar");
+      const start = Date.now() + 5 * 864e5, mkEv = await get2(8092, "casa.tail.ts.net", "/api/calendar", "Bearer " + TOK, "POST", JSON.stringify({ title: "Reunión; con, comas", start, location: "Sala 1" })); eq(mkEv.status, 200);
+      const bad = await get2(8092, "casa.tail.ts.net", "/api/calendar", "Bearer " + TOK, "POST", JSON.stringify({ title: "", start: "no es fecha" })); eq(bad.status, 500);
+      const ics = await get2(8092, "casa.tail.ts.net", "/api/calendar.ics", "Bearer " + TOK); eq(ics.status, 200); ok(String(ics.headers["content-type"]).includes("text/calendar"), String(ics.headers["content-type"])); ok(ics.body.includes("SUMMARY:Reunión\\; con\\, comas") && ics.body.includes("BEGIN:VCALENDAR"), ics.body);
+      const st = JSON.parse((await get2(8092, "casa.tail.ts.net", "/api/notify/settings", "Bearer " + TOK)).body); ok(Array.isArray(st.reminders) && st.reminders.every((x: unknown) => Number.isInteger(x)), "la app Android lee los minutos de recordatorio de aquí");
+      const evs = JSON.parse((await get2(8092, "casa.tail.ts.net", `/api/calendar?from=${Date.now()}&to=${Date.now() + 40 * 3600_000 * 6}`, "Bearer " + TOK)).body).events; ok(evs.length >= 1 && ["id", "title", "start", "allDay", "location"].every((k) => k in evs[0]), "forma de los eventos que lee la app Android: " + JSON.stringify(evs[0]));
+      const nf = JSON.parse((await get2(8092, "casa.tail.ts.net", "/api/notifications?after=0", "Bearer " + TOK)).body); ok(["id", "kind", "read", "title", "body"].every((k) => k in nf.items[0]) && typeof nf.last === "number", "forma de los avisos que lee la app Android");
+      const id = JSON.parse(mkEv.body).event.id; eq((await get2(8092, "casa.tail.ts.net", `/api/calendar/${id}.ics`, "Bearer " + TOK)).status, 200);
+      eq(JSON.parse((await get2(8092, "casa.tail.ts.net", `/api/calendar/${id}`, "Bearer " + TOK, "DELETE")).body).ok, true);
     });
     await t("el bloqueo es por IP: con otra IP de cliente detrás del túnel sigue entrando", async () => {
       const r = await new Promise<number>((res, rej) => { const q = httpm.request({ host: "127.0.0.1", port: 8092, path: "/?t=" + TOK, headers: { host: "casa.tail.ts.net", "x-forwarded-for": "203.0.113.9" } }, (x) => { x.resume(); res(x.statusCode ?? 0); }); q.on("error", rej); q.end(); });
