@@ -48,6 +48,8 @@ public class MainActivity extends Activity {
     /** true mientras la app está en pantalla: entonces los avisos se ven dentro y no se duplican como notificaciones. */
     static volatile boolean visible;
     private String pendingUid, pendingAccount; // mensaje que abrir al tocar una notificación
+    private boolean demo;                              // modo demostración: datos de ejemplo, sin servidor
+    private static final String DEMO_ORIGIN = "https://appassets.androidplatform.net";
     private SharedPreferences prefs;
     private LinearLayout root;
     private WebView web;
@@ -133,6 +135,16 @@ public class MainActivity extends Activity {
         });
         f.addView(go);
 
+        // Modo demostración: la app funciona con datos de ejemplo, sin cuenta ni servidor (para probarla y para la revisión de Google Play)
+        TextView or = text("¿Solo quieres verla?", 14, false);
+        or.setPadding(0, dp(20), 0, dp(4));
+        f.addView(or);
+        Button demoBtn = new Button(this);
+        demoBtn.setText("Probar con datos de ejemplo");
+        demoBtn.setAllCaps(false);
+        demoBtn.setOnClickListener(v -> { demo = true; openWeb(DEMO_ORIGIN, null); });
+        f.addView(demoBtn);
+
         TextView help = text("¿Dónde encuentro esto? Al arrancar CasaMail en tu PC se imprime un enlace con la clave (…/?t=CLAVE). Pégalo aquí entero. La guía paso a paso está en github.com/samauel05-byte/casamail (docs/ANDROID.md).", 13, false);
         help.setTextColor(Color.GRAY);
         help.setPadding(0, dp(24), 0, 0);
@@ -141,10 +153,12 @@ public class MainActivity extends Activity {
 
     // ---------- navegador integrado ----------
     private void openWeb(String server, String token) {
-        Notifs.canales(this);
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
-            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 21);   // Android 13+: hay que pedir permiso para avisar
-        AvisosJob.programar(this);
+        if (!demo) {
+            Notifs.canales(this);
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
+                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 21);   // Android 13+: hay que pedir permiso para avisar
+            AvisosJob.programar(this);
+        }
         root.removeAllViews();
         web = new WebView(this);
         root.addView(web, new LinearLayout.LayoutParams(-1, -1));
@@ -161,8 +175,17 @@ public class MainActivity extends Activity {
         cm.setAcceptThirdPartyCookies(web, false);
         final String origin = server;
         web.setWebViewClient(new WebViewClient() {
+            /** En la demostración todo sale de los recursos de la app: no hay red. */
+            @Override public WebResourceResponse shouldInterceptRequest(WebView v, WebResourceRequest r) {
+                if (!demo) return null;
+                Uri u = r.getUrl(); String path = u.getPath() == null ? "" : u.getPath();
+                if (!DEMO_ORIGIN.equals(u.getScheme() + "://" + u.getHost()) || !path.startsWith("/demo/") || path.contains("..")) return new WebResourceResponse("text/plain", "UTF-8", 404, "No encontrado", null, new java.io.ByteArrayInputStream(new byte[0]));
+                try { return new WebResourceResponse(mime(path), "UTF-8", getAssets().open(path.substring(1))); }
+                catch (java.io.IOException e) { return new WebResourceResponse("text/plain", "UTF-8", 404, "No encontrado", null, new java.io.ByteArrayInputStream(new byte[0])); }
+            }
             @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
                 Uri u = r.getUrl();
+                if ("casamail-demo-exit".equals(u.getScheme())) { demo = false; showForm(null, prefs.getString("server", null)); return true; }
                 if (sameOrigin(u, origin)) return false;
                 String sch = u.getScheme() == null ? "" : u.getScheme();
                 if (sch.equals("https") || sch.equals("mailto") || sch.equals("tel")) {       // enlaces externos: en el navegador, nunca dentro de la app
@@ -207,7 +230,14 @@ public class MainActivity extends Activity {
                 Toast.makeText(this, "Descargando " + name, Toast.LENGTH_SHORT).show();
             } catch (Exception e) { Toast.makeText(this, "No se pudo descargar", Toast.LENGTH_SHORT).show(); }
         });
-        web.loadUrl(server + "/?t=" + token);    // el servidor guarda una cookie y redirige a la página sin la clave
+        web.loadUrl(demo ? DEMO_ORIGIN + "/demo/index.html?demo=1" : server + "/?t=" + token);    // el servidor guarda una cookie y redirige a la página sin la clave
+    }
+
+    private static String mime(String path) {
+        String p = path.toLowerCase(java.util.Locale.ROOT);
+        if (p.endsWith(".html")) return "text/html"; if (p.endsWith(".js")) return "text/javascript"; if (p.endsWith(".css")) return "text/css";
+        if (p.endsWith(".png")) return "image/png"; if (p.endsWith(".svg")) return "image/svg+xml"; if (p.endsWith(".json")) return "application/json";
+        return "application/octet-stream";
     }
 
     private static boolean sameOrigin(Uri u, String origin) {

@@ -4,6 +4,14 @@ plugins { id("com.android.application") }
 def vcode = (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInteger()
 def vname = System.getenv("ANDROID_VERSION_NAME") ?: "0.3.2"
 
+// La interfaz web (../public) se empaqueta dentro de la app: el modo demostración la muestra con datos de ejemplo, sin servidor.
+def demoAssets = layout.buildDirectory.dir("generated/demo-assets")
+tasks.register("copiarDemo", Copy) {
+    from("../../public")
+    into(demoAssets.map { it.dir("demo") })
+}
+tasks.named("preBuild") { dependsOn("copiarDemo") }
+
 android {
     namespace = "app.casamail.movil"
     compileSdk = 36
@@ -34,6 +42,7 @@ android {
             if (System.getenv("CASAMAIL_KEYSTORE")) signingConfig = signingConfigs.getByName("upload")
         }
     }
+    sourceSets { main { assets.srcDir(demoAssets) } }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
     lint { abortOnError = false }
 }
