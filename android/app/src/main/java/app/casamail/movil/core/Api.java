@@ -236,6 +236,7 @@ public final class Api {
         String citaTxt = "El " + fecha + ", " + de + " escribió:\n> " + o.optString("text").replace("\n", "\n> "), cab = "El " + Firma.esc(fecha) + ", " + Firma.esc(de) + " escribió:";
         String citaHtml = "<div>" + cab + "</div><blockquote style=\"margin:0 0 0 .8ex;border-left:2px solid #ccc;padding-left:1ex\">" + Firma.esc(o.optString("text")).replace("\n", "<br>") + "</blockquote>";
         JSONObject p = new JSONObject().put("to", de).put("subject", asunto.toLowerCase(Locale.ROOT).startsWith("re:") ? asunto : "Re: " + asunto).put("text", b.optString("text")).put("now", b.optBoolean("now"));
+        if (b.optJSONArray("attachments") != null && b.getJSONArray("attachments").length() > 0) p.put("attachments", b.getJSONArray("attachments"));
         if (b.optBoolean("replyAll") && !o.optString("cc").isEmpty()) p.put("cc", o.optString("cc"));
         if (b.has("signature") && !b.isNull("signature")) p.put("signature", b.optString("signature"));
         if (!o.isNull("messageId")) { p.put("inReplyTo", o.getString("messageId")); JSONArray refs = new JSONArray(o.getJSONArray("references").toString()); refs.put(o.getString("messageId")); p.put("references", refs); }

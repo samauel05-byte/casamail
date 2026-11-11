@@ -393,7 +393,7 @@ function compose(o = {}) {
   $('#from').innerHTML = S.accounts.map(a => `<option value="${esc(a.id)}">${esc(a.email)}</option>`).join(''); $('#from').value = r ? A() : (o.from || firstAcct());
   $('#rowfrom').hidden = r || S.accounts.length < 2;
   $('#to').value = o.to || ''; $('#cc').value = ''; $('#sub').value = o.subject || (r ? 'Re: ' + S.cur.subject.replace(/^re:\s*/i, '') : ''); $('#rowcc').hidden = true; $('#showcc').hidden = r;
-  $('#rowto').hidden = $('#rowsub').hidden = r; $('#sched').hidden = $('#attlabel').hidden = r; $('#when').hidden = true;
+  $('#rowto').hidden = $('#rowsub').hidden = r; $('#sched').hidden = r; $('#attlabel').hidden = false; $('#when').hidden = true;
   $('#rcpt').hidden = r; $('#rcpt').setAttribute('aria-pressed', 'false');
   $('#body').value = o.text || ''; drawSig(); $('#cs').textContent = ''; $('#aibox').hidden = true; $('#aist').textContent = '';
   $('#sendhint').innerHTML = S.delay > 0 ? `${I('clock', 'sm')} Saldrá en ${S.delay} min desde la bandeja de salida: puedes retirarlo hasta entonces.` : `${I('bolt', 'sm')} Se enviará al instante.`;
@@ -430,7 +430,7 @@ async function doSend(now) {
   if (!reply && !p.subject.trim() && !confirm('¿Enviar sin asunto?')) return;
   $('#compose').hidden = true;
   try {
-    const r = reply ? await api(`/api/message/${cur.uid}/reply?account=${encodeURIComponent(acct)}&folder=${encodeURIComponent(f)}`, { text: p.text, replyAll: reply.all, now, signature: sigId }) : await api(`/api/send?account=${encodeURIComponent(acct)}`, { ...p, signature: sigId, sendAt: when, now });
+    const r = reply ? await api(`/api/message/${cur.uid}/reply?account=${encodeURIComponent(acct)}&folder=${encodeURIComponent(f)}`, { text: p.text, replyAll: reply.all, now, signature: sigId, attachments: p.attachments }) : await api(`/api/send?account=${encodeURIComponent(acct)}`, { ...p, signature: sigId, sendAt: when, now });
     if (r.sent) return toast('Enviado ✔');
     if (r.kind === 'scheduled') return toast('Programado para ' + new Date(r.sendAt).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' }), { action: 'Ver salida', onAction: () => settings('salida') });
     toast(`En la bandeja de salida: se enviará en ${fmtLeft(r.sendAt - Date.now())}. Puedes retirarlo hasta entonces.`, { action: 'Retirar', ms: 20000, onAction: async () => { try { await api('/api/outbox/' + r.id, undefined, 'DELETE'); toast('Mensaje retirado: no se enviará'); outboxCount(); compose({ to: p.to, subject: p.subject, text: p.text, reply, from: acct }); } catch (e) { toast(e.message, { kind: 'bad', ms: 7000 }); } } });

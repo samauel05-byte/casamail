@@ -93,7 +93,9 @@ export function forAccount(accountId: string): SigSet {
 }
 export function save(accountId: string, set: Partial<SigSet>): SigSet {
   const items = (set.items ?? []).slice(0, 10).map((x) => clean(x)), ids = new Set(items.map((x) => x.id));
-  const out: SigSet = { items, newDefault: ids.has(set.newDefault ?? "") ? set.newDefault! : (items[0]?.id ?? ""), replyDefault: ids.has(set.replyDefault ?? "") ? set.replyDefault! : (items[0]?.id ?? ""), serverManaged: !!set.serverManaged };
+  const nd = ids.has(set.newDefault ?? "") ? set.newDefault! : (items[0]?.id ?? "");
+  // si no se eligió una firma específica para respuestas, se usa la de los mensajes nuevos (antes caía en la primera de la lista, que podía no ser la de imagen)
+  const out: SigSet = { items, newDefault: nd, replyDefault: ids.has(set.replyDefault ?? "") ? set.replyDefault! : nd, serverManaged: !!set.serverManaged };
   const a = all(); a[accountId] = out; store.writeJson(FILE, a); return out;
 }
 /** Qué firma se usa: `choice` = id elegido en el redactor; "" = ninguna; undefined = la predeterminada (mensaje nuevo o respuesta). */

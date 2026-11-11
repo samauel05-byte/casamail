@@ -376,13 +376,14 @@ export async function createFolder(acc: Account, name: string) {
 
 /** Construye la respuesta (cita + cabeceras de hilo) sin enviarla. */
 /** `signature`: firma a usar (null = ninguna). Va ENTRE la respuesta y el mensaje citado, como en Outlook. */
-export async function buildReply(acc: Account, folder: string, uid: number, body: { text: string; replyAll?: boolean }, signature: Signature | null = null): Promise<Outgoing> {
+export async function buildReply(acc: Account, folder: string, uid: number, body: { text: string; replyAll?: boolean; attachments?: Outgoing["attachments"] }, signature: Signature | null = null): Promise<Outgoing> {
   const orig = await getMessage(acc, folder, uid, false);
   const subject = /^re:/i.test(orig.subject) ? orig.subject : `Re: ${orig.subject}`;
   const quoted = orig.text.split("\n").map((l) => `> ${l}`).join("\n"), head = `El ${orig.date ?? ""}, ${orig.from} escribió:`;
   const quote = { text: `${head}\n${quoted}`, html: `<div>${escapeHtml(head)}</div><blockquote style="margin:0 0 0 .8ex;border-left:2px solid #ccc;padding-left:1ex">${orig.html ? sanitizeHtml(orig.html, { images: false }) : escapeHtml(orig.text).split("\n").join("<br>")}</blockquote>` };
   const base: Outgoing = {
     to: orig.from, cc: body.replyAll ? orig.cc || undefined : undefined, subject, text: body.text,
+    attachments: body.attachments && body.attachments.length ? body.attachments : undefined,
     inReplyTo: orig.messageId ?? undefined,
     references: [...orig.references, ...(orig.messageId ? [orig.messageId] : [])],
   };

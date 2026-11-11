@@ -110,6 +110,18 @@ await t("respuesta en cola conserva el hilo", async () => {
   const it = outbox.enqueue("t", p, { delayMs: 1 }); await wait(20); await outbox.tick();
   const m = sentMails.at(-1)!; ok(m.subject!.startsWith("Re:") && !!m.inReplyTo, "hilo"); void it;
 });
+await t("responder con adjunto: la respuesta lleva el archivo", async () => {
+  const msgs = (await mail.listMessages(acc, "Archive")).messages; ok(msgs.length > 0, "sin mensajes");
+  const before = sentMails.length;
+  await mail.replyTo(acc, "Archive", msgs[0].uid, { text: "Te adjunto el archivo", attachments: [{ filename: "nota.txt", content: Buffer.from("hola adjunto").toString("base64"), encoding: "base64" }] });
+  eq(sentMails.length, before + 1, "se envió"); const m = sentMails.at(-1)!; ok(m.subject!.startsWith("Re:") && !!m.inReplyTo, "hilo");
+  const att = m.attachments.find((a) => a.filename === "nota.txt"); ok(att && att.content.toString() === "hola adjunto", "falta el adjunto en la respuesta: " + m.attachments.map((a) => a.filename).join(","));
+});
+await t("firma: sin una específica para respuestas, hereda la de mensajes nuevos (no la primera de la lista)", () => {
+  const set = sigsMod.save("sigtest", { items: [{ id: "texto", name: "Texto", html: "<div>Solo texto</div>", text: "Solo texto" }, { id: "img", name: "Con logo", html: "<div>Logo</div>", text: "Logo" }], newDefault: "img" });
+  eq(set.replyDefault, "img", "la respuesta debe heredar la firma de mensajes nuevos");
+  eq(sigsMod.pick("sigtest", undefined, true)?.id, "img", "pick de respuesta");
+});
 
 await t("candado: con dos CasaMail abiertos solo uno ejecuta el planificador", async () => {
   const f = path.join(os.tmpdir(), `cm-lock-${Date.now()}`);
