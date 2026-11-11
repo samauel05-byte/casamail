@@ -17,6 +17,7 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.window.OnBackInvokedDispatcher;
 import android.webkit.CookieManager;
 import android.webkit.URLUtil;
 import android.webkit.ValueCallback;
@@ -73,6 +74,8 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         leerExtras(getIntent());
+        // Android 13+ (y obligatorio al apuntar a Android 16): el botón/gesto Atrás se registra así; onBackPressed() ya no se llama.
+        if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::atras);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
         pad = dp(16);
         root = new LinearLayout(this);
@@ -244,7 +247,10 @@ public class MainActivity extends Activity {
         } else super.onActivityResult(req, res, data);
     }
 
-    @Override public void onBackPressed() {
+    private void atras() {
+        if (web != null && web.canGoBack()) web.goBack(); else finish();
+    }
+    @Override public void onBackPressed() { // Android 12 e inferiores
         if (web != null && web.canGoBack()) web.goBack(); else super.onBackPressed();
     }
 

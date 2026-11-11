@@ -55,7 +55,7 @@ La app muestra notificaciones de **correo nuevo** (con resumen), **invitaciones*
 
 ## Compilar la app tú mismo
 
-Requisitos: JDK 17 y Android SDK 35.
+Requisitos: JDK 17 y Android SDK 36.
 
 ```bash
 cd android

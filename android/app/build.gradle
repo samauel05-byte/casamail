@@ -6,11 +6,11 @@ def vname = System.getenv("ANDROID_VERSION_NAME") ?: "0.3.1"
 
 android {
     namespace = "app.casamail.movil"
-    compileSdk = 35
+    compileSdk = 36
     defaultConfig {
         applicationId = "app.casamail.movil"
         minSdk = 24
-        targetSdk = 35
+        targetSdk = 36
         versionCode = vcode
         versionName = vname
     }

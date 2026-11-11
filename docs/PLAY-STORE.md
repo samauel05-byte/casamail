@@ -3,7 +3,7 @@
 Lo que ya está listo en el repositorio y lo que tienes que hacer tú (hay pasos que solo puede hacer el titular de la cuenta).
 
 ## Lo que ya está hecho
-- App Android (`android/`): `app.casamail.movil`, targetSdk 35, solo HTTPS, sin copias en la nube, sin permisos salvo Internet.
+- App Android (`android/`): `app.casamail.movil`, targetSdk 36, solo HTTPS, sin copias en la nube, sin permisos salvo Internet.
 - Flujo de GitHub **Android** que genera APK + AAB (y lo firma si añades los secretos de abajo).
 - Gráficos en `android/play/`: icono 512×512, gráfico de funciones 1024×500 y 4 capturas de teléfono 1080×1920.
 - Política de privacidad: `docs/PRIVACIDAD.md`.
