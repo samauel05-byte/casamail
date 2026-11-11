@@ -104,7 +104,7 @@ function setTheme(m, save = true) {
 
 /* ---------- iconos estáticos ---------- */
 mkIcon('#menu', 'menu'); mkIcon('#searchic', 'search'); mkIcon('#cfg', 'sliders'); mkIcon('#cmin', 'minus'); mkIcon('#draftb', 'file'); mkIcon('#cclose', 'x'); mkIcon('#sendnow', 'bolt'); mkIcon('#sched', 'clock');
-mkIcon('#attlabel', 'clip'); mkIcon('#aiboxic', 'sparkles'); mkIcon('#dclose', 'x'); mkIcon('#cgo', 'send');
+mkIcon('#attlabel', 'clip'); mkIcon('#aiboxic', 'sparkles'); mkIcon('#dclose', 'x'); mkIcon('#cgo', 'send'); mkIcon('#rcpt', 'check');
 $('#logomark').innerHTML = LOGO(44);
 $('#aisearch').innerHTML = `${I('sparkles', 'sm')} IA`; $('#asst').innerHTML = `${YL('sm')} Yerleny`; $('#aitog').innerHTML = `${I('sparkles', 'sm')} Redactar con Yerleny`; $('#drico').innerHTML = YL('md');
 let themeSaved = 'auto'; try { themeSaved = localStorage.getItem('cm-theme') || 'auto'; } catch { /* ignore */ }
@@ -334,6 +334,8 @@ function renderMsg() {
   $('#view').innerHTML = `<div class="vtool">${tb('back', 'back', 'Volver', 'only-narrow')}${loc ? '' : tb('ar', 'archive', 'Archivar (E)') + tb('sp', 'spam', 'Marcar como spam')}${tb('tr', 'trash', loc ? 'Eliminar del archivo' : 'Papelera (#)')}<span class="vs"></span>${tb('un', 'mail', 'Marcar como no leído')}${loc ? '' : tb('sn', 'clock', 'Posponer')}${tb('st', 'star', 'Destacar (S)')}<a class="iconbtn" id="dl" href="/api/message/${m.uid}/eml?${qs()}" download title="Descargar como .eml" aria-label="Descargar como .eml">${I('download')}</a><span class="grow"></span>${tb('rp', 'reply', 'Responder (R)')}${loc ? '' : tb('ra', 'replyall', 'Responder a todos')}</div>
   <div class="vbody"><h1 class="vsub">${esc(m.subject)}</h1>
     <div class="vhead">${avatar(f.name, f.email, 'lg')}<div class="who"><div class="nm">${esc(f.name)} <span class="em">&lt;${esc(f.email)}&gt;</span></div><div class="to">Para ${esc(m.to || '—')}${m.cc ? ' · Cc ' + esc(m.cc) : ''}</div></div><span class="dt">${m.date ? new Date(m.date).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' }) : ''}</span></div>
+    ${m.receipt ? `<div class="rcptinfo ok">${I('check', 'sm')}<span>Leído el ${new Date(m.receipt.readAt).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' })}</span></div>` : ''}
+    ${m.wantsReceipt ? `<div class="rcptinfo ask">${I('mail', 'sm')}<span>El remitente pidió confirmación de lectura.</span><button class="btn btn-sm" id="sendrcpt">Enviar confirmación</button></div>` : ''}
     <div class="aibar"><button class="btn btn-ai btn-sm" id="ais">${I('sparkles', 'sm')} Resumir</button><button class="btn btn-ai btn-sm" id="air">${I('sparkles', 'sm')} Sugerir respuestas</button>${loc ? '' : `<button class="btn btn-sm" id="agm">${I('calendar', 'sm')} Agendar reunión</button>`}</div><div id="aiout"></div>
     ${m.html && !S.images ? `<div class="privacy">${I('shield')}<span>Imágenes remotas bloqueadas para proteger tu privacidad.</span><button class="btn btn-sm" id="im">Cargar imágenes</button></div>` : ''}
     ${m.attachments.length ? `<div class="atts">${m.attachments.map(a => `<a class="att" href="/api/message/${m.uid}/attachment/${a.index}?${qs()}">${I('download')}<span>${esc(a.filename)}<small>${fmtSize(a.size)}</small></span></a>`).join('')}</div>` : ''}
@@ -344,6 +346,7 @@ function renderMsg() {
   on('#st', () => toggleStar()); on('#un', () => act('flags', { read: false }, 'Marcado como no leído'));
   on('#ar', () => act('archive', {}, 'Archivado', 1)); on('#sp', () => act('spam', {}, 'Movido a spam', 1)); on('#tr', () => { if (loc && !confirm('¿Eliminar este mensaje del archivo local?')) return; act('trash', {}, loc ? 'Eliminado del archivo' : 'Movido a la papelera', 1); });
   on('#sn', () => snoozeDialog()); on('#agm', e => agendarMensaje(m, e.currentTarget));
+  on('#sendrcpt', async e => { const b = e.currentTarget; busy(b, true); try { await api(`/api/message/${m.uid}/receipt?${qs()}`, {}); b.closest('.rcptinfo').innerHTML = `${I('check', 'sm')}<span>Confirmación de lectura enviada.</span>`; b.closest('.rcptinfo').className = 'rcptinfo ok'; toast('Confirmación enviada al remitente.'); } catch (x) { busy(b, false); toast('No se pudo enviar la confirmación: ' + x.message, { kind: 'bad' }); } });
   on('#ais', async e => {
     if (!needAi()) return; const b = e.currentTarget; busy(b, true); $('#aiout').innerHTML = `<div class="card-ai"><h4>${I('sparkles', 'sm')} Yerleny · Resumen</h4><div class="typing"><i></i><i></i><i></i></div></div>`;
     try { const r = await api('/api/ai/summarize?account=' + encodeURIComponent(A()), { uid: m.uid, folder: S.folder }); $('#aiout').innerHTML = `<div class="card-ai"><h4>${I('sparkles', 'sm')} Yerleny · Resumen</h4><pre>${esc(r.summary)}</pre></div>`; } catch (x) { $('#aiout').innerHTML = `<div class="card-ai err">${esc(x.message)}</div>`; }
@@ -391,6 +394,7 @@ function compose(o = {}) {
   $('#rowfrom').hidden = r || S.accounts.length < 2;
   $('#to').value = o.to || ''; $('#cc').value = ''; $('#sub').value = o.subject || (r ? 'Re: ' + S.cur.subject.replace(/^re:\s*/i, '') : ''); $('#rowcc').hidden = true; $('#showcc').hidden = r;
   $('#rowto').hidden = $('#rowsub').hidden = r; $('#sched').hidden = $('#attlabel').hidden = r; $('#when').hidden = true;
+  $('#rcpt').hidden = r; $('#rcpt').setAttribute('aria-pressed', 'false');
   $('#body').value = o.text || ''; drawSig(); $('#cs').textContent = ''; $('#aibox').hidden = true; $('#aist').textContent = '';
   $('#sendhint').innerHTML = S.delay > 0 ? `${I('clock', 'sm')} Saldrá en ${S.delay} min desde la bandeja de salida: puedes retirarlo hasta entonces.` : `${I('bolt', 'sm')} Se enviará al instante.`;
   $('#compose').classList.toggle('reply', r); setTimeout(() => { const t = r || o.to ? $('#body') : $('#to'); t.focus(); if (t === $('#body')) t.setSelectionRange(0, 0); }, 40);
@@ -403,6 +407,7 @@ let ct; $('#to').oninput = e => { clearTimeout(ct); ct = setTimeout(async () => 
 $('#files').onchange = async e => { for (const f of e.target.files) { if (f.size > 20e6) { toast(f.name + ' supera 20 MB', { kind: 'bad' }); continue; } S.files.push({ filename: f.name, encoding: 'base64', content: await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result.split(',')[1]); fr.readAsDataURL(f); }) }); } e.target.value = ''; renderFiles(); };
 $('#sched').onclick = () => { const w = $('#when'); w.hidden = !w.hidden; if (!w.value) w.value = new Date(Date.now() + 36e5 - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 16); };
 $('#from').onchange = () => drawSig();
+$('#rcpt').onclick = () => { const on = $('#rcpt').getAttribute('aria-pressed') !== 'true'; $('#rcpt').setAttribute('aria-pressed', on); toast(on ? 'Pedirás confirmación de lectura: te avisaremos cuando el destinatario lo abra (si su correo lo permite).' : 'Sin confirmación de lectura.', { ms: on ? 6000 : 2500 }); };
 $('#aitog').onclick = () => { if (!needAi()) return; warmAi(); $('#aibox').hidden = !$('#aibox').hidden; if (!$('#aibox').hidden) $('#aiins').focus(); };
 $('#aigo').onclick = async e => {
   const ins = $('#aiins').value.trim(); if (!ins) return; busy(e.currentTarget, true); $('#aist').textContent = 'Redactando…';
@@ -420,7 +425,7 @@ async function doSend(now) {
   const reply = S.reply, cur = S.cur, acct = reply ? A() : $('#from').value, f = S.folder;
   const when = !now && !$('#when').hidden && $('#when').value ? new Date($('#when').value).toISOString() : null;
   const sigId = $('#sigbar').hidden ? undefined : $('#sigsel').value; // '' = sin firma; undefined = la predeterminada del servidor
-  const p = { to: $('#to').value, cc: $('#cc').value || undefined, subject: $('#sub').value, text: $('#body').value, attachments: S.files.length ? S.files : undefined };
+  const p = { to: $('#to').value, cc: $('#cc').value || undefined, subject: $('#sub').value, text: $('#body').value, attachments: S.files.length ? S.files : undefined, readReceipt: $('#rcpt').getAttribute('aria-pressed') === 'true' || undefined };
   if (!reply && !p.to.trim()) { $('#cs').innerHTML = '<span class="err">Falta el destinatario</span>'; return; }
   if (!reply && !p.subject.trim() && !confirm('¿Enviar sin asunto?')) return;
   $('#compose').hidden = true;

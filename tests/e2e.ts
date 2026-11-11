@@ -1075,6 +1075,43 @@ console.log("\nModo remoto (app Android): seguridad");
   } finally { local.kill(); remote.kill(); await new Promise((r) => setTimeout(r, 300)); fs.rmSync(home, { recursive: true, force: true }); }
 }
 
+console.log("\nConfirmaciones de lectura (MDN)");
+{
+  const receipts = await import("../src/receipts.js");
+  await t("pedir confirmación añade la cabecera MDN al enviar", async () => {
+    await mail.sendMessage(acc, { to: "Ana <ana@empresa.com>", subject: "Con acuse", text: "Avísame cuando lo leas", readReceipt: true });
+    const h = sentMails.at(-1)!.headers.get("disposition-notification-to") as { text?: string } | string | undefined;
+    const txt = typeof h === "string" ? h : h?.text ?? "";
+    eq(txt.includes(acc.email), true, "falta Disposition-Notification-To: " + JSON.stringify(h));
+  });
+  await t("sin pedirla no añade la cabecera", async () => {
+    await mail.sendMessage(acc, { to: "Ana <ana@empresa.com>", subject: "Sin acuse", text: "normal" });
+    eq(sentMails.at(-1)!.headers.get("disposition-notification-to") ?? null, null, "no debería pedir acuse");
+  });
+  await t("sendReadReceipt arma un MDN válido dirigido al remitente", async () => {
+    const r = await mail.sendReadReceipt(acc, { from: "Ana <ana@empresa.com>", subject: "Presupuesto", messageId: "abc123@empresa.com", dispositionNotificationTo: null });
+    eq(r.to, "ana@empresa.com");
+    const m = sentMails.at(-1)!;
+    ok((m.subject || "").startsWith("Leído:"), "asunto del acuse: " + m.subject);
+    const dn = m.attachments.find((a) => /message\/disposition-notification/i.test(a.contentType));
+    ok(!!dn, "falta la parte message/disposition-notification");
+    const body = dn!.content.toString("utf8");
+    const got = body.match(/Original-Message-ID:\s*(<[^>]+>)/i);
+    ok(!!got, "Original-Message-ID debe ir entre < > para que el otro cliente lo reconozca: " + body);
+    eq(got![1], "<abc123@empresa.com>");
+  });
+  await t("el acuse se dirige a Disposition-Notification-To cuando existe", async () => {
+    const r = await mail.sendReadReceipt(acc, { from: "Ana <ana@empresa.com>", subject: "x", messageId: "<id@x>", dispositionNotificationTo: "Acuses <acuses@empresa.com>" });
+    eq(r.to, "acuses@empresa.com");
+  });
+  await t("el almacén normaliza el Message-ID con o sin < >", () => {
+    receipts.record("<round@trip.test>", { readAt: "2026-01-01T00:00:00.000Z", by: "ana@empresa.com" });
+    ok(!!receipts.get("round@trip.test"), "debe encontrarse sin < >");
+    ok(!!receipts.get("<ROUND@TRIP.TEST>"), "debe ser insensible a mayúsculas y a < >");
+    eq(receipts.get("otro@nada.test"), null);
+  });
+}
+
 console.log(`\n${pass} OK, ${failN} fallos`);
 imap.close?.(); smtp.close(); fakeAi.close(); mockOauth.close();
 process.exit(failN ? 1 : 0);

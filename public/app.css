@@ -159,6 +159,11 @@ main{display:grid;grid-template-columns:228px minmax(330px,400px) minmax(0,1fr);
 .aibar{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0 4px}
 .privacy{display:flex;align-items:center;gap:10px;background:var(--warn-soft);color:var(--warn);border-radius:12px;padding:8px 12px;margin:14px 0 0;font-size:13px}
 .privacy .btn{margin-left:auto;height:28px}
+#rcpt[aria-pressed=true]{background:color-mix(in srgb,var(--ai) 16%,transparent);color:var(--ai)}
+.rcptinfo{display:flex;align-items:center;gap:8px;border-radius:12px;padding:8px 12px;margin:14px 0 0;font-size:13px}
+.rcptinfo.ok{background:color-mix(in srgb,var(--ok,#1a9d63) 14%,transparent);color:var(--ok,#1a9d63)}
+.rcptinfo.ask{background:var(--surface-2);color:var(--ink-2)}
+.rcptinfo .btn{margin-left:auto;height:28px}
 .card-ai{position:relative;border-radius:14px;padding:14px 16px;margin:12px 0;background:linear-gradient(var(--surface),var(--surface)) padding-box,linear-gradient(135deg,var(--ai),var(--ai-2)) border-box;border:1.5px solid transparent;box-shadow:0 6px 24px color-mix(in srgb,var(--ai) 14%,transparent)}
 .card-ai h4{display:flex;align-items:center;gap:6px;color:var(--ai);font-size:12.5px;letter-spacing:.06em;text-transform:uppercase;margin-bottom:8px}
 .card-ai pre{white-space:pre-wrap;font:inherit;margin:0}
