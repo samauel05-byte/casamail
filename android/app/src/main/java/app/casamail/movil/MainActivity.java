@@ -88,6 +88,8 @@ public class MainActivity extends Activity {
         // Android 13+ (y obligatorio al apuntar a Android 16): el botón/gesto Atrás se registra así; onBackPressed() ya no se llama.
         if (Build.VERSION.SDK_INT >= 33) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::atras);
         prefs = getSharedPreferences(PREFS, MODE_PRIVATE);
+        // Red de seguridad: si algo cierra la app, guardamos el detalle para mostrarlo en el próximo arranque (no hay forma de verlo si no, sin PC).
+        Thread.setDefaultUncaughtExceptionHandler((th, ex) -> { guardarError(ex); android.os.Process.killProcess(android.os.Process.myPid()); });
         pad = dp(16);
         root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -103,8 +105,38 @@ public class MainActivity extends Activity {
             v.setPadding(0, top, 0, bottom);
             return insets;
         });
-        String server = prefs.getString("server", null), token = prefs.getString("token", null);
-        if (server != null && token != null) openWeb(server, token); else { nativo = true; openWeb(DEMO_ORIGIN, null); }   // sin servidor guardado: la app funciona sola en el móvil
+        // Si el arranque anterior se cerró solo, mostramos el detalle en vez de volver a intentarlo a ciegas.
+        String errPrevio = prefs.getString("ultimo_error", null);
+        if (errPrevio != null) { prefs.edit().remove("ultimo_error").apply(); mostrarTraza(errPrevio); return; }
+        try {
+            String server = prefs.getString("server", null), token = prefs.getString("token", null);
+            if (server != null && token != null) openWeb(server, token); else { nativo = true; openWeb(DEMO_ORIGIN, null); }   // sin servidor guardado: la app funciona sola en el móvil
+        } catch (Throwable t) { guardarError(t); mostrarTraza(trazaDe(t)); }
+    }
+
+    private String trazaDe(Throwable t) { java.io.StringWriter sw = new java.io.StringWriter(); t.printStackTrace(new java.io.PrintWriter(sw)); return sw.toString(); }
+
+    private void guardarError(Throwable t) {
+        try {
+            String v = ""; try { v = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Throwable ignored) { }
+            prefs.edit().putString("ultimo_error", "CasaMail " + v + " · Android " + Build.VERSION.SDK_INT + "\n" + trazaDe(t)).commit();
+        } catch (Throwable ignored) { }
+    }
+
+    /** Pantalla de diagnóstico: muestra el error del cierre para poder arreglarlo (sin depender de un PC para leer el logcat). */
+    private void mostrarTraza(String texto) {
+        destroyWeb();
+        root.removeAllViews();
+        ScrollView sv = new ScrollView(this);
+        LinearLayout f = new LinearLayout(this); f.setOrientation(LinearLayout.VERTICAL); f.setPadding(pad, pad, pad, pad); sv.addView(f);
+        TextView h = text("CasaMail se cerró. Copia o captura esto y envíalo para arreglarlo:", 16, true); h.setPadding(0, 0, 0, dp(10)); f.addView(h);
+        TextView t = text(texto, 12, false); t.setTypeface(Typeface.MONOSPACE); t.setTextIsSelectable(true); f.addView(t);
+        Button copiar = boton("Copiar", false);
+        copiar.setOnClickListener(v -> { ((android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(android.content.ClipData.newPlainText("CasaMail error", texto)); Toast.makeText(this, "Copiado", Toast.LENGTH_SHORT).show(); });
+        LinearLayout.LayoutParams l1 = new LinearLayout.LayoutParams(-1, dp(48)); l1.topMargin = dp(14); f.addView(copiar, l1);
+        Button reintentar = boton("Reintentar", true); reintentar.setOnClickListener(v -> recreate());
+        LinearLayout.LayoutParams l2 = new LinearLayout.LayoutParams(-1, dp(48)); l2.topMargin = dp(10); f.addView(reintentar, l2);
+        root.addView(sv, new LinearLayout.LayoutParams(-1, -1));
     }
 
     // ---------- pantalla de conexión ----------

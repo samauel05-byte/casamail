@@ -2,7 +2,7 @@ plugins { id("com.android.application") }
 
 // Versión: la fija el flujo de GitHub (ANDROID_VERSION_CODE) o, en local, 1. Cada subida a Google Play necesita un código MAYOR que el anterior.
 def vcode = (System.getenv("ANDROID_VERSION_CODE") ?: "1").toInteger()
-def vname = System.getenv("ANDROID_VERSION_NAME") ?: "0.4.1"
+def vname = System.getenv("ANDROID_VERSION_NAME") ?: "0.4.2"
 
 // La interfaz web (../public) se empaqueta dentro de la app: el modo demostración la muestra con datos de ejemplo, sin servidor.
 def demoAssets = layout.buildDirectory.dir("generated/demo-assets")
@@ -36,9 +36,9 @@ android {
     }
     buildTypes {
         release {
-            minifyEnabled = true
-            shrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Sin minificar (R8): JavaMail usa reflexión y carga sus protocolos por nombre; el minificado provocaba un cierre al arrancar. La app pesa poco, así que no compensa el riesgo.
+            minifyEnabled = false
+            shrinkResources = false
             if (System.getenv("CASAMAIL_KEYSTORE")) signingConfig = signingConfigs.getByName("upload")
         }
     }
