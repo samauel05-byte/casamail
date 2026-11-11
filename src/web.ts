@@ -17,6 +17,7 @@ import * as idle from "./idle.js";
 import * as sigs from "./signature.js";
 import * as updates from "./updates.js";
 import * as cal from "./calendar.js";
+import * as receipts from "./receipts.js";
 import * as oauth from "./oauth.js";
 import * as archive from "./archive.js";
 import * as jobs from "./jobs.js";
@@ -177,7 +178,13 @@ app.get("/api/search", h(async (r) => {
   const res = isLocal(r) ? archive.searchMessages(q, null, limit, offset) : await mail.searchMessages(acc(r), q, folder(r), limit, offset);
   return { ...res, next: offset + res.messages.length };
 }));
-app.get("/api/message/:uid", h(async (r) => (isLocal(r) ? archive.getMessage(uidOf(r), true) : mail.getMessage(acc(r), folder(r), uidOf(r), true))));
+app.get("/api/message/:uid", h(async (r) => {
+  if (isLocal(r)) return archive.getMessage(uidOf(r), true);
+  const a = acc(r), m = await mail.getMessage(a, folder(r), uidOf(r), true);
+  const mine = (m.from || "").toLowerCase().includes(a.email.toLowerCase());
+  return { ...m, receipt: receipts.get(m.messageId), wantsReceipt: !!m.dispositionNotificationTo && !mine, receiptTo: m.dispositionNotificationTo || null };
+}));
+app.post("/api/message/:uid/receipt", h(async (r) => { const a = acc(r); const m = await mail.getMessage(a, folder(r), uidOf(r), false); return mail.sendReadReceipt(a, { from: m.from, subject: m.subject, messageId: m.messageId, dispositionNotificationTo: m.dispositionNotificationTo }); }));
 app.post("/api/message/:uid/flags", h(async (r) => { if (isLocal(r)) archive.setFlags(uidOf(r), r.body); else await mail.setFlags(acc(r), folder(r), uidOf(r), r.body); return { ok: true }; }));
 app.post("/api/message/:uid/trash", h(async (r) => { if (isLocal(r)) archive.deleteMessage(uidOf(r)); else await mail.trashMessage(acc(r), folder(r), uidOf(r)); return { ok: true }; }));
 app.post("/api/message/:uid/archive", h(async (r) => { if (isLocal(r)) notLocal("Archivar"); await mail.archiveMessage(acc(r), folder(r), uidOf(r)); return { ok: true }; }));

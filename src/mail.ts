@@ -195,6 +195,24 @@ export async function searchMessages(acc: Account, q: SearchQuery, folder = "INB
 export interface FullMessage extends Summary {
   cc: string; messageId: string | null; references: string[]; text: string; html: string | null;
   attachments: { index: number; filename: string; contentType: string; size: number }[];
+  dispositionNotificationTo?: string | null; // si el remitente pidió confirmación de lectura
+  mdnFor?: string | null;                     // si ESTE correo es una confirmación de lectura: el Message-ID del original
+}
+
+/** Lee una cabecera de texto del mensaje parseado (mailparser guarda las cabeceras en un Map). */
+function headerText(p: ParsedMail, name: string): string | null {
+  const v = p.headers.get(name) as unknown;
+  if (!v) return null;
+  if (typeof v === "string") return v;
+  if (typeof v === "object" && v !== null && "text" in v) return String((v as { text: string }).text);
+  return String(v);
+}
+/** Si el mensaje es una confirmación de lectura (MDN), devuelve el Message-ID del correo original al que confirma. */
+function mdnOriginalId(p: ParsedMail): string | null {
+  const part = p.attachments.find((a) => /message\/disposition-notification/i.test(a.contentType));
+  if (!part || !part.content) return null;
+  const m = part.content.toString("utf8").match(/Original-Message-ID:\s*(<[^>]+>)/i);
+  return m ? m[1] : null;
 }
 
 async function fetchParsed(c: ImapFlow, uid: number): Promise<ParsedMail> {
@@ -217,6 +235,7 @@ export async function getMessage(acc: Account, folder: string, uid: number, mark
         hasAttachments: p.attachments.length > 0, messageId: p.messageId ?? null, references: refs,
         text: p.text ?? "", html: p.html || null,
         attachments: p.attachments.map((a, i) => ({ index: i, filename: a.filename ?? `adjunto-${i}`, contentType: a.contentType, size: a.size })),
+        dispositionNotificationTo: headerText(p, "disposition-notification-to"), mdnFor: mdnOriginalId(p),
       };
     } finally { lock.release(); }
   });
@@ -266,7 +285,7 @@ export async function trashMessage(acc: Account, folder: string, uid: number) {
 
 export interface Outgoing {
   to: string; cc?: string; bcc?: string; subject: string; text?: string; html?: string;
-  inReplyTo?: string; references?: string[];
+  inReplyTo?: string; references?: string[]; readReceipt?: boolean;
   attachments?: { filename: string; content: string; encoding?: "base64"; cid?: string; contentType?: string; contentDisposition?: "inline" | "attachment" }[];
 }
 
@@ -276,7 +295,8 @@ async function findFolder(c: ImapFlow, use: string, names: RegExp): Promise<stri
 }
 
 function toRaw(from: string, m: Outgoing & { messageId?: string }): Promise<Buffer> {
-  return new MailComposer({ from, ...m }).compile().build();
+  const headers = m.readReceipt ? { "Disposition-Notification-To": from, "Return-Receipt-To": from } : undefined; // pedir confirmación de lectura
+  return new MailComposer({ from, ...m, headers }).compile().build();
 }
 
 /** Guarda un mensaje como borrador en la carpeta Drafts del servidor. */
@@ -294,7 +314,8 @@ export async function sendMessage(acc: Account, m: Outgoing) {
   const domain = acc.email.split("@")[1] ?? "localhost";
   const full = { ...m, messageId: `<${crypto.randomUUID()}@${domain}>` };
   const t = await smtp(acc);
-  const info = await t.sendMail({ from: acc.email, ...full });
+  const headers = m.readReceipt ? { "Disposition-Notification-To": acc.email, "Return-Receipt-To": acc.email } : undefined;
+  const info = await t.sendMail({ from: acc.email, ...full, headers });
   learnContacts([m.to, m.cc ?? ""].filter(Boolean));
   // Gmail guarda solo la copia en Enviados; en el resto la añadimos nosotros (best-effort).
   let sentCopy = false;
@@ -305,6 +326,30 @@ export async function sendMessage(acc: Account, m: Outgoing) {
     } catch { /* no bloquea el envío */ }
   }
   return { messageId: info.messageId, accepted: info.accepted, rejected: info.rejected, sentCopy };
+}
+
+/** Envía una confirmación de lectura (MDN, multipart/report) al remitente que la pidió. Lo decide el usuario al abrir el correo. */
+export async function sendReadReceipt(acc: Account, orig: { from: string; subject: string; messageId: string | null; dispositionNotificationTo?: string | null }) {
+  const dest = (orig.dispositionNotificationTo || "").trim() || orig.from;
+  const to = dest.match(/<([^>]+)>/)?.[1] || dest.replace(/^.*\s/, "").trim();
+  if (!to || !/@/.test(to)) throw new Error("El correo no indica a dónde enviar la confirmación.");
+  const b = "cmdn_" + crypto.randomUUID().replace(/-/g, "");
+  const fecha = new Date().toUTCString();
+  const subj = (orig.subject || "(sin asunto)").replace(/[\r\n]+/g, " ");
+  const raw = Buffer.from(
+    `From: ${acc.email}\r\nTo: ${to}\r\nSubject: Leído: ${subj}\r\nMIME-Version: 1.0\r\n` +
+    `Content-Type: multipart/report; report-type=disposition-notification; boundary="${b}"\r\n\r\n` +
+    `--${b}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n` +
+    `Tu mensaje "${subj}" fue mostrado (leído) por ${acc.email} el ${fecha}.\r\n` +
+    `Esto es una confirmación de lectura automática; no asegura que el contenido se haya leído por completo.\r\n\r\n` +
+    `--${b}\r\nContent-Type: message/disposition-notification\r\n\r\n` +
+    `Reporting-UA: CasaMail\r\nFinal-Recipient: rfc822;${acc.email}\r\n` +
+    (orig.messageId ? `Original-Message-ID: ${/^</.test(orig.messageId.trim()) ? orig.messageId.trim() : `<${orig.messageId.trim()}>`}\r\n` : "") +
+    `Disposition: manual-action/MDN-sent-manually; displayed\r\n\r\n` +
+    `--${b}--\r\n`, "utf8");
+  const t = await smtp(acc);
+  await t.sendMail({ envelope: { from: acc.email, to: [to] }, raw });
+  return { to };
 }
 
 export async function archiveMessage(acc: Account, folder: string, uid: number) {

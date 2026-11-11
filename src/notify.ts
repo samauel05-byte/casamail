@@ -3,6 +3,7 @@ import * as store from "./store.js";
 import * as mail from "./mail.js";
 import * as ai from "./ai.js";
 import * as cal from "./calendar.js";
+import * as receipts from "./receipts.js";
 import type { Account } from "./store.js";
 
 /**
@@ -130,6 +131,7 @@ export async function checkMail(now = Date.now(), s = getSettings(), only?: stri
         let aiLeft = MAX_AI_PER_CYCLE;
         for (const sm of fresh.slice(0, MAX_INDIVIDUAL)) {
           let full: mail.FullMessage; try { full = await mail.getMessage(acc, "INBOX", sm.uid, false); } catch { continue; }
+          if (full.mdnFor) { receipts.record(full.mdnFor, { readAt: full.date ?? new Date(now).toISOString(), by: full.from }); continue; } // confirmación de lectura: se registra, no se avisa como correo
           let summary = snippet(full.text);
           if (s.aiSummary && aiReady() && aiLeft > 0) { aiLeft--; try { const t = (await withTimeout(ai.notifySummary({ from: full.from, to: full.to, subject: full.subject, date: full.date, text: full.text }), 30_000)).replace(/\s+/g, " ").trim(); if (t) summary = t.length > 320 ? t.slice(0, 319) + "…" : t; } catch { /* se queda el comienzo del texto */ } }
           push({ kind: "mail", title: nameOf(full.from), body: `${full.subject}\n${summary}`, account: acc.id, folder: "INBOX", uid: sm.uid }, now); pushed++;
