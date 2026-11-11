@@ -18,7 +18,7 @@
   };
 
   /* Redes de CasaLabs: rellena las direcciones (https://instagram.com/…, https://facebook.com/…) y aparecen solas. */
-  const REDES = { Instagram: '', Facebook: '' };
+  const REDES = { Web: 'https://www.casalabs.com.do/', Instagram: 'https://www.instagram.com/casalabs.rd', Facebook: 'https://www.facebook.com/p/Casalabsrd-61593879404954/' };
   const creditos = () => `<p class="mut" style="margin:26px 0 0;font-size:12.5px">Desarrollado por <b>CasaLabs</b>${Object.entries(REDES).filter(([, u]) => u).map(([n, u]) => ` · <a href="${u}" target="_blank" rel="noopener noreferrer">${n}</a>`).join('')}</p>`;
 
   /* ----- inicio de sesión / crear cuenta ----- */
