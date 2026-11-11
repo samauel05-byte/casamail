@@ -146,21 +146,35 @@ const isLocal = (r: Request) => r.query.account === archive.LOCAL_ID;
 const notLocal = (what: string) => { throw new Error(`${what} no está disponible en el Archivo local`); };
 app.get("/api/folders", h(async (r) => (isLocal(r) ? archive.listFolders() : mail.listFolders(acc(r)))));
 app.get("/api/messages", h(async (r) => {
-  if (isLocal(r)) return archive.listMessages(folder(r), { limit: Number(r.query.limit ?? 40), offset: Number(r.query.offset ?? 0), unread: r.query.unread === "1" });
+  const limit = Number(r.query.limit ?? 40), offset = Number(r.query.offset ?? 0);
+  if (isLocal(r)) { const res = archive.listMessages(folder(r), { limit, offset, unread: r.query.unread === "1" }); return { ...res, next: offset + res.messages.length }; }
   const a = acc(r), f = folder(r);
-  const res = await mail.listMessages(a, f, { limit: Number(r.query.limit ?? 40), offset: Number(r.query.offset ?? 0), unread: r.query.unread === "1" });
+  const res = await mail.listMessages(a, f, { limit, offset, unread: r.query.unread === "1" });
   const hide = snoozeSet(a.id, f); learnFrom(res.messages);
-  return { total: res.total, messages: res.messages.filter((m) => !hide.has(m.uid)) };
+  return { total: res.total, next: offset + res.messages.length, messages: res.messages.filter((m) => !hide.has(m.uid)) };
 }));
-app.get("/api/unified", h(async () => {
+/** Bandeja unificada con páginas sin tope: de cada cuenta se toman los `offset+limit` más nuevos, se mezclan por fecha y se devuelve la página pedida. */
+app.get("/api/unified", h(async (r) => {
+  const limit = Math.min(Number(r.query.limit ?? 50) || 50, 3000), offset = Math.max(0, Number(r.query.offset ?? 0) || 0), need = offset + limit;
+  let total = 0;
   const all = await Promise.all(store.loadAccounts().map(async (a) => {
-    try { const hide = snoozeSet(a.id, "INBOX"); return (await mail.listMessages(a, "INBOX", { limit: 25 })).messages.filter((m) => !hide.has(m.uid)).map((m) => ({ ...m, account: a.id })); } catch { return []; }
+    try {
+      const hide = snoozeSet(a.id, "INBOX"), got: (mail.Summary & { account: string })[] = []; let t = 0;
+      for (let o = 0; o < need; o += 200) { // de 200 en 200, hasta cubrir lo pedido
+        const res = await mail.listMessages(a, "INBOX", { limit: Math.min(200, need - o), offset: o }); t = res.total;
+        got.push(...res.messages.filter((m) => !hide.has(m.uid)).map((m) => ({ ...m, account: a.id }))); if (o + 200 >= res.total) break;
+      }
+      total += t; return got;
+    } catch { return []; }
   }));
-  return { messages: all.flat().sort((x, y) => (y.date ?? "").localeCompare(x.date ?? "")).slice(0, 60) };
+  const merged = all.flat().sort((x, y) => (y.date ?? "").localeCompare(x.date ?? "") || x.account.localeCompare(y.account) || y.uid - x.uid); // desempate fijo: si no, las páginas podrían repetir o saltarse correos con la misma hora
+  return { total, next: offset + limit, messages: merged.slice(offset, need) };
 }));
 app.get("/api/search", h(async (r) => {
   const q = { text: r.query.q as string, from: r.query.from as string | undefined, subject: r.query.subject as string | undefined, since: r.query.since as string | undefined, before: r.query.before as string | undefined, unread: r.query.unread === "1" || undefined, starred: r.query.starred === "1" || undefined };
-  return isLocal(r) ? archive.searchMessages(q, null, 50) : mail.searchMessages(acc(r), q, folder(r), 50);
+  const limit = Math.min(Number(r.query.limit ?? 50) || 50, 200), offset = Math.max(0, Number(r.query.offset ?? 0) || 0);
+  const res = isLocal(r) ? archive.searchMessages(q, null, limit, offset) : await mail.searchMessages(acc(r), q, folder(r), limit, offset);
+  return { ...res, next: offset + res.messages.length };
 }));
 app.get("/api/message/:uid", h(async (r) => (isLocal(r) ? archive.getMessage(uidOf(r), true) : mail.getMessage(acc(r), folder(r), uidOf(r), true))));
 app.post("/api/message/:uid/flags", h(async (r) => { if (isLocal(r)) archive.setFlags(uidOf(r), r.body); else await mail.setFlags(acc(r), folder(r), uidOf(r), r.body); return { ok: true }; }));

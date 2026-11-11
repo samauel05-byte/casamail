@@ -191,7 +191,7 @@ const canRefresh = () => document.visibilityState === 'visible' && S.acct && S.a
 function liveRefresh() {
   if (!canRefresh()) { liveDirty = true; return; } liveDirty = false;
   const sel = S.cur ? S.cur.uid : null;
-  list().then(() => { if (sel) $$('.m').forEach(e => e.classList.toggle('on', e.dataset.u == sel)); }).catch(() => {}); folders(true);
+  refreshList().then(() => { if (sel) $$('.m').forEach(e => e.classList.toggle('on', e.dataset.u == sel)); }).catch(() => {}); folders(true);
 }
 document.addEventListener('visibilitychange', () => { if (liveDirty && document.visibilityState === 'visible') liveRefresh(); });
 (async function liveLoop() {

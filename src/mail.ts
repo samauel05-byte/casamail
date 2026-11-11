@@ -131,7 +131,7 @@ async function fetchSummaries(c: ImapFlow, range: number[] | string): Promise<Su
 
 /** `fresh`: usa una conexión propia y nueva (así ve SIEMPRE el estado real del buzón, aunque el servidor no avise de correo nuevo a las sesiones abiertas). La usan los avisos. */
 export async function listMessages(acc: Account, folder = "INBOX", opts: { limit?: number; offset?: number; unread?: boolean; fresh?: boolean } = {}) {
-  const limit = Math.min(opts.limit ?? 25, 100), offset = opts.offset ?? 0;
+  const limit = Math.min(opts.limit ?? 25, 200), offset = Math.max(0, opts.offset ?? 0);
   return (opts.fresh ? withFresh : withImap)(acc, async (c) => {
     const reused = !!c.mailbox && c.mailbox.path === folder; // carpeta ya abierta en esta conexión: su recuento puede estar desfasado
     const lock = await c.getMailboxLock(folder);
@@ -149,7 +149,7 @@ export async function listMessages(acc: Account, folder = "INBOX", opts: { limit
   });
 }
 
-export async function searchMessages(acc: Account, q: SearchQuery, folder = "INBOX", limit = 25) {
+export async function searchMessages(acc: Account, q: SearchQuery, folder = "INBOX", limit = 25, offset = 0) {
   return withImap(acc, async (c) => {
     const lock = await c.getMailboxLock(folder);
     try {
@@ -164,7 +164,7 @@ export async function searchMessages(acc: Account, q: SearchQuery, folder = "INB
       if (q.starred) query.flagged = true;
       if (!Object.keys(query).length) query.all = true;
       const found = ((await c.search(query, { uid: true })) || []).sort((a, b) => b - a);
-      return { total: found.length, messages: await fetchSummaries(c, found.slice(0, Math.min(limit, 100))) };
+      return { total: found.length, messages: await fetchSummaries(c, found.slice(Math.max(0, offset), Math.max(0, offset) + Math.min(limit, 200))) };
     } finally { lock.release(); }
   });
 }
