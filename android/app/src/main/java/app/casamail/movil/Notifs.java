@@ -10,7 +10,7 @@ import android.os.Build;
 
 /** Canales y publicación de notificaciones de Android. */
 final class Notifs {
-    static final String CH_MAIL = "correo", CH_REUNION = "reuniones";
+    static final String CH_MAIL = "correo", CH_REUNION = "reuniones", CH_ESTADO = "estado";
     private Notifs() { }
 
     static void canales(Context c) {
@@ -20,6 +20,11 @@ final class Notifs {
         NotificationChannel r = new NotificationChannel(CH_REUNION, "Reuniones y recordatorios", NotificationManager.IMPORTANCE_HIGH);
         r.setDescription("Invitaciones, recordatorios de reuniones y la agenda de la mañana");
         nm.createNotificationChannel(r);
+        // Canal silencioso y minimizado para el aviso permanente de "vigilando tu correo" (servicio en primer plano).
+        NotificationChannel e = new NotificationChannel(CH_ESTADO, "Vigilancia de correo", NotificationManager.IMPORTANCE_MIN);
+        e.setDescription("Aviso permanente mientras CasaMail vigila tu correo para avisarte de los nuevos.");
+        e.setShowBadge(false);
+        nm.createNotificationChannel(e);
     }
 
     /** Publica una notificación. Al tocarla se abre CasaMail (y, si es de un correo, ese mensaje). */
