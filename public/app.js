@@ -332,7 +332,6 @@ function snoozeDialog() {
 }
 
 /* ---------- redactar ---------- */
-const sigFor = id => S.sig[id] || '';
 function compose(o = {}) {
   if (!S.accounts.length) return toast('Para escribir necesitas una cuenta conectada. Añádela en Ajustes → Cuentas.', { kind: 'bad', action: 'Añadir', onAction: () => settings('cuentas') });
   S.reply = o.reply || null; S.files = []; renderFiles(); const r = !!S.reply;
@@ -341,7 +340,7 @@ function compose(o = {}) {
   $('#rowfrom').hidden = r || S.accounts.length < 2;
   $('#to').value = o.to || ''; $('#cc').value = ''; $('#sub').value = o.subject || (r ? 'Re: ' + S.cur.subject.replace(/^re:\s*/i, '') : ''); $('#rowcc').hidden = true; $('#showcc').hidden = r;
   $('#rowto').hidden = $('#rowsub').hidden = r; $('#sched').hidden = $('#attlabel').hidden = r; $('#when').hidden = true;
-  const sg = sigFor($('#from').value); $('#body').value = (o.text || '') + (sg ? `\n\n-- \n${sg}` : ''); $('#cs').textContent = ''; $('#aibox').hidden = true; $('#aist').textContent = '';
+  $('#body').value = o.text || ''; drawSig(); $('#cs').textContent = ''; $('#aibox').hidden = true; $('#aist').textContent = '';
   $('#sendhint').innerHTML = S.delay > 0 ? `${I('clock', 'sm')} Saldrá en ${S.delay} min desde la bandeja de salida: puedes retirarlo hasta entonces.` : `${I('bolt', 'sm')} Se enviará al instante.`;
   $('#compose').classList.toggle('reply', r); setTimeout(() => { const t = r || o.to ? $('#body') : $('#to'); t.focus(); if (t === $('#body')) t.setSelectionRange(0, 0); }, 40);
 }
@@ -352,29 +351,30 @@ $('#showcc').onclick = () => { $('#rowcc').hidden = false; $('#cc').focus(); };
 let ct; $('#to').oninput = e => { clearTimeout(ct); ct = setTimeout(async () => { const q = e.target.value.split(',').pop().trim(); if (q.length < 2) return; try { const c = await api('/api/contacts?q=' + encodeURIComponent(q)); const pre = e.target.value.includes(',') ? e.target.value.replace(/[^,]*$/, '') + ' ' : ''; $('#cl').innerHTML = c.map(x => `<option value="${esc(pre + (x.name ? `${x.name} <${x.email}>` : x.email))}">`).join(''); } catch { /* sin sugerencias */ } }, 160); };
 $('#files').onchange = async e => { for (const f of e.target.files) { if (f.size > 20e6) { toast(f.name + ' supera 20 MB', { kind: 'bad' }); continue; } S.files.push({ filename: f.name, encoding: 'base64', content: await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result.split(',')[1]); fr.readAsDataURL(f); }) }); } e.target.value = ''; renderFiles(); };
 $('#sched').onclick = () => { const w = $('#when'); w.hidden = !w.hidden; if (!w.value) w.value = new Date(Date.now() + 36e5 - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 16); };
-$('#from').onchange = () => { /* la firma sigue la cuenta si el cuerpo no se ha tocado */ };
+$('#from').onchange = () => drawSig();
 $('#aitog').onclick = () => { if (!needAi()) return; warmAi(); $('#aibox').hidden = !$('#aibox').hidden; if (!$('#aibox').hidden) $('#aiins').focus(); };
 $('#aigo').onclick = async e => {
   const ins = $('#aiins').value.trim(); if (!ins) return; busy(e.currentTarget, true); $('#aist').textContent = 'Redactando…';
-  try { const r = await api('/api/ai/draft?account=' + encodeURIComponent(A()), { instruction: ins, tone: $('#aitone').value, uid: S.reply && S.cur ? S.cur.uid : undefined, folder: S.folder }); if (r.subject && !S.reply) $('#sub').value = r.subject; const sg = sigFor($('#from').value); $('#body').value = r.body + (sg ? `\n\n-- \n${sg}` : ''); $('#aist').textContent = 'Listo. Revísalo antes de enviar.'; }
+  try { const r = await api('/api/ai/draft?account=' + encodeURIComponent(A()), { instruction: ins, tone: $('#aitone').value, uid: S.reply && S.cur ? S.cur.uid : undefined, folder: S.folder }); if (r.subject && !S.reply) $('#sub').value = r.subject; $('#body').value = r.body; $('#aist').textContent = 'Listo. Revísalo antes de enviar.'; }
   catch (x) { $('#aist').innerHTML = `<span class="err">${esc(x.message)}</span>`; }
   busy($('#aigo'), false);
 };
 $('#rw').onchange = async e => {
   const mode = e.target.value; e.target.value = ''; if (!mode || !needAi()) return; const ta = $('#body'), a = ta.selectionStart, b = ta.selectionEnd, sel = a !== b;
-  const txt = sel ? ta.value.slice(a, b) : ta.value.split('\n-- \n')[0]; if (!txt.trim()) return; $('#cs').textContent = 'Reescribiendo…';
-  try { const r = await api('/api/ai/rewrite', { text: txt, mode }); ta.value = sel ? ta.value.slice(0, a) + r.text + ta.value.slice(b) : r.text + (ta.value.includes('\n-- \n') ? '\n-- \n' + ta.value.split('\n-- \n').slice(1).join('\n-- \n') : ''); $('#cs').textContent = ''; } catch (x) { $('#cs').innerHTML = `<span class="err">${esc(x.message)}</span>`; }
+  const txt = sel ? ta.value.slice(a, b) : ta.value; if (!txt.trim()) return; $('#cs').textContent = 'Reescribiendo…';
+  try { const r = await api('/api/ai/rewrite', { text: txt, mode }); ta.value = sel ? ta.value.slice(0, a) + r.text + ta.value.slice(b) : r.text; $('#cs').textContent = ''; } catch (x) { $('#cs').innerHTML = `<span class="err">${esc(x.message)}</span>`; }
 };
 $('#draftb').onclick = async () => { try { await api(`/api/draft?account=${encodeURIComponent($('#from').value)}`, { to: $('#to').value, cc: $('#cc').value || undefined, subject: $('#sub').value, text: $('#body').value, attachments: S.files }); toast('Borrador guardado'); folders(); } catch (e) { $('#cs').innerHTML = `<span class="err">${esc(e.message)}</span>`; } };
 async function doSend(now) {
   const reply = S.reply, cur = S.cur, acct = reply ? A() : $('#from').value, f = S.folder;
   const when = !now && !$('#when').hidden && $('#when').value ? new Date($('#when').value).toISOString() : null;
+  const sigId = $('#sigbar').hidden ? undefined : $('#sigsel').value; // '' = sin firma; undefined = la predeterminada del servidor
   const p = { to: $('#to').value, cc: $('#cc').value || undefined, subject: $('#sub').value, text: $('#body').value, attachments: S.files.length ? S.files : undefined };
   if (!reply && !p.to.trim()) { $('#cs').innerHTML = '<span class="err">Falta el destinatario</span>'; return; }
   if (!reply && !p.subject.trim() && !confirm('¿Enviar sin asunto?')) return;
   $('#compose').hidden = true;
   try {
-    const r = reply ? await api(`/api/message/${cur.uid}/reply?account=${encodeURIComponent(acct)}&folder=${encodeURIComponent(f)}`, { text: p.text, replyAll: reply.all, now }) : await api(`/api/send?account=${encodeURIComponent(acct)}`, { ...p, sendAt: when, now });
+    const r = reply ? await api(`/api/message/${cur.uid}/reply?account=${encodeURIComponent(acct)}&folder=${encodeURIComponent(f)}`, { text: p.text, replyAll: reply.all, now, signature: sigId }) : await api(`/api/send?account=${encodeURIComponent(acct)}`, { ...p, signature: sigId, sendAt: when, now });
     if (r.sent) return toast('Enviado ✔');
     if (r.kind === 'scheduled') return toast('Programado para ' + new Date(r.sendAt).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' }), { action: 'Ver salida', onAction: () => settings('salida') });
     toast(`En la bandeja de salida: se enviará en ${fmtLeft(r.sendAt - Date.now())}. Puedes retirarlo hasta entonces.`, { action: 'Retirar', ms: 20000, onAction: async () => { try { await api('/api/outbox/' + r.id, undefined, 'DELETE'); toast('Mensaje retirado: no se enviará'); outboxCount(); compose({ to: p.to, subject: p.subject, text: p.text, reply, from: acct }); } catch (e) { toast(e.message, { kind: 'bad', ms: 7000 }); } } });
@@ -610,11 +610,6 @@ async function tabIA(c) {
   $('#yna').onclick = async () => { const t = $('#yni').value.trim(); if (!t) return; redraw(await api('/api/yerleny/notes', { note: t })); $('#yni').value = ''; };
   $('#yni').onkeydown = e => { if (e.key === 'Enter') $('#yna').click(); };
   bindNotes(); drawEngines(); if (loc?.download?.state === 'downloading') watchLocal();
-}
-async function tabFirma(c) {
-  const a = await api('/api/accounts'), s = (await api('/api/settings')).signatures || {};
-  c.innerHTML = `<h3>Firma</h3><p class="lead">Se añade al final de tus mensajes nuevos y respuestas.</p>${a.map(x => `<label class="lb">${esc(x.email)}</label><textarea data-id="${esc(x.id)}" class="field sg" rows="3">${esc(s[x.id] || '')}</textarea>`).join('') || '<div class="note">Añade una cuenta primero.</div>'}<div class="row" style="margin-top:16px"><button class="btn btn-primary" id="sgs">Guardar firmas</button></div>`;
-  $('#sgs').onclick = async () => { const o = {}; $$('.sg').forEach(t => o[t.dataset.id] = t.value); await api('/api/settings', { signatures: o }); S.sig = o; toast('Firmas guardadas'); };
 }
 async function tabEnvio(c) {
   const d = (await api('/api/send-delay')).minutes;

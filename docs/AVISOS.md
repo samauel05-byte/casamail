@@ -11,6 +11,9 @@ CasaMail te avisa de lo importante **sin que tengas que abrirlo**. Todo se calcu
 | **Recordatorio** | Antes de cada reunión (por defecto 1 día, 1 hora y 10 minutos antes) | "Reunión en 10 min (15:30) · Sala 2 · enlace". Si CasaMail estuvo apagado, da solo el aviso más cercano. |
 | **Agenda de la mañana** | Cada día a la hora que elijas (8:00 por defecto), solo si hay reuniones | "Hoy tienes 2 reuniones: 11:00 … 16:30 …" y las de mañana. |
 
+## Tiempo real
+CasaMail mantiene una conexión en espera con tu servidor (**IMAP IDLE**): cuando llega, se borra o se lee un correo (también desde otro dispositivo), el servidor avisa y la lista se actualiza sola y sale el aviso en **~1 segundo**, sin esperar. Si el servidor no admite IDLE o se corta la conexión, se reconecta sola y el sondeo de cada minuto sigue de respaldo.
+
 ## Dónde te llegan
 - **Escritorio (Windows/macOS/Linux)**: notificaciones del sistema, **inmediatas**, también con la ventana cerrada si la app sigue en segundo plano (activa "Iniciar con el sistema" en el icono de la bandeja para que arranque sola).
 - **Navegador**: avisos en pantalla y, si lo permites en Ajustes → Avisos, notificaciones del navegador mientras la pestaña esté abierta.

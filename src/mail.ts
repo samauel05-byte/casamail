@@ -9,6 +9,8 @@ import { once } from "node:events";
 import type { Writable } from "node:stream";
 import { mboxEntry } from "./mbox.js";
 import type { Account } from "./store.js";
+import { sanitize as sanitizeHtml, withSignature, type Signature } from "./signature.js";
+const escapeHtml = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 export interface Summary {
   uid: number; subject: string; from: string; to: string; date: string | null;
@@ -35,9 +37,9 @@ async function smtp(acc: Account) {
 const IDLE_MS = Number(process.env.CASAMAIL_IMAP_IDLE_MS ?? 4 * 60_000);
 interface Pooled { client: ImapFlow; key: string; timer?: NodeJS.Timeout }
 const pool = new Map<string, Pooled>(), connecting = new Map<string, Promise<Pooled>>();
-const fingerprint = (a: Account) => [a.imap.host, a.imap.port, a.imap.secure, a.user, a.pass, a.oauth?.refreshToken ?? ""].join("|"); // si cambian las credenciales, se reconecta
+export const fingerprint = (a: Account) => [a.imap.host, a.imap.port, a.imap.secure, a.user, a.pass, a.oauth?.refreshToken ?? ""].join("|"); // si cambian las credenciales, se reconecta
 
-async function openImap(acc: Account): Promise<ImapFlow> {
+export async function openImap(acc: Account): Promise<ImapFlow> {
   const c = new ImapFlow({ host: acc.imap.host, port: acc.imap.port, secure: acc.imap.secure, auth: await imapAuth(acc), logger: false });
   c.on("error", () => {});
   try { await c.connect(); }
@@ -242,7 +244,7 @@ export async function trashMessage(acc: Account, folder: string, uid: number) {
 export interface Outgoing {
   to: string; cc?: string; bcc?: string; subject: string; text?: string; html?: string;
   inReplyTo?: string; references?: string[];
-  attachments?: { filename: string; content: string; encoding?: "base64" }[];
+  attachments?: { filename: string; content: string; encoding?: "base64"; cid?: string; contentType?: string; contentDisposition?: "inline" | "attachment" }[];
 }
 
 async function findFolder(c: ImapFlow, use: string, names: RegExp): Promise<string | null> {
@@ -305,20 +307,43 @@ export async function createFolder(acc: Account, name: string) {
 }
 
 /** Construye la respuesta (cita + cabeceras de hilo) sin enviarla. */
-export async function buildReply(acc: Account, folder: string, uid: number, body: { text: string; replyAll?: boolean }): Promise<Outgoing> {
+/** `signature`: firma a usar (null = ninguna). Va ENTRE la respuesta y el mensaje citado, como en Outlook. */
+export async function buildReply(acc: Account, folder: string, uid: number, body: { text: string; replyAll?: boolean }, signature: Signature | null = null): Promise<Outgoing> {
   const orig = await getMessage(acc, folder, uid, false);
   const subject = /^re:/i.test(orig.subject) ? orig.subject : `Re: ${orig.subject}`;
-  const quoted = orig.text.split("\n").map((l) => `> ${l}`).join("\n");
-  const text = `${body.text}\n\nEl ${orig.date ?? ""}, ${orig.from} escribió:\n${quoted}`;
-  return {
-    to: orig.from, cc: body.replyAll ? orig.cc || undefined : undefined, subject, text,
+  const quoted = orig.text.split("\n").map((l) => `> ${l}`).join("\n"), head = `El ${orig.date ?? ""}, ${orig.from} escribió:`;
+  const quote = { text: `${head}\n${quoted}`, html: `<div>${escapeHtml(head)}</div><blockquote style="margin:0 0 0 .8ex;border-left:2px solid #ccc;padding-left:1ex">${orig.html ? sanitizeHtml(orig.html, { images: false }) : escapeHtml(orig.text).split("\n").join("<br>")}</blockquote>` };
+  const base: Outgoing = {
+    to: orig.from, cc: body.replyAll ? orig.cc || undefined : undefined, subject, text: body.text,
     inReplyTo: orig.messageId ?? undefined,
     references: [...orig.references, ...(orig.messageId ? [orig.messageId] : [])],
   };
+  return withSignature(base, signature, quote);
 }
 
-export async function replyTo(acc: Account, folder: string, uid: number, body: { text: string; replyAll?: boolean }) {
-  return sendMessage(acc, await buildReply(acc, folder, uid, body));
+export async function replyTo(acc: Account, folder: string, uid: number, body: { text: string; replyAll?: boolean }, signature: Signature | null = null) {
+  return sendMessage(acc, await buildReply(acc, folder, uid, body, signature));
+}
+
+/** Últimos correos enviados con HTML (imágenes "cid:" ya convertidas): de aquí se importa la firma que el usuario ya usa. */
+export async function sentSamples(acc: Account, limit = 12): Promise<{ subject: string; date: string | null; html: string }[]> {
+  return withImap(acc, async (c) => {
+    const f = await findFolder(c, "\\Sent", /sent|enviad/i); if (!f) return [];
+    const lock = await c.getMailboxLock(f);
+    try {
+      const total = (c.mailbox && c.mailbox.exists) || 0; if (!total) return [];
+      const uids: number[] = []; for await (const m of c.fetch(`${Math.max(1, total - limit + 1)}:${total}`, { uid: true })) uids.push(m.uid);
+      const out: { subject: string; date: string | null; html: string }[] = [];
+      for (const uid of uids.reverse()) {
+        const p = await fetchParsed(c, uid); if (!p.html) continue;
+        let html = p.html; const imgs = new Map<string, string>();
+        for (const a of p.attachments) if (a.cid && /^image\/(png|jpe?g|gif|webp)$/i.test(a.contentType) && a.size <= 450_000) imgs.set(a.cid.replace(/[<>]/g, ""), `data:${a.contentType.toLowerCase().replace("image/jpg", "image/jpeg")};base64,${a.content.toString("base64")}`);
+        html = html.replace(/src=(["'])cid:([^"']+)\1/gi, (m, q: string, cid: string) => (imgs.has(cid) ? `src=${q}${imgs.get(cid)}${q}` : m));
+        out.push({ subject: p.subject ?? "", date: p.date?.toISOString() ?? null, html });
+      }
+      return out;
+    } finally { lock.release(); }
+  });
 }
 
 export interface SourceItem { uid: number; source: Buffer; read: boolean; starred: boolean; date: Date | null }

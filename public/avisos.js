@@ -184,3 +184,24 @@ async function tabAvisos(c) {
   const save = async p => { try { s = await api('/api/notify/settings', p, 'PUT'); } catch (e) { fail(e); } };
   draw();
 }
+
+/* ---------- tiempo real: el servidor avisa de correo nuevo/borrado/leído (IMAP IDLE) y la lista se actualiza sola ---------- */
+let liveSeq = null, liveDirty = false;
+const canRefresh = () => document.visibilityState === 'visible' && S.acct && S.acct !== LOCAL && !S.aiq && $('#compose').hidden && $('#modal').hidden;
+function liveRefresh() {
+  if (!canRefresh()) { liveDirty = true; return; } liveDirty = false;
+  const sel = S.cur ? S.cur.uid : null;
+  list().then(() => { if (sel) $$('.m').forEach(e => e.classList.toggle('on', e.dataset.u == sel)); }).catch(() => {}); folders(true);
+}
+document.addEventListener('visibilitychange', () => { if (liveDirty && document.visibilityState === 'visible') liveRefresh(); });
+(async function liveLoop() {
+  let fails = 0;
+  for (;;) {
+    try {
+      const r = await api(liveSeq === null ? '/api/changes?wait=0' : `/api/changes?since=${liveSeq}&wait=25`); fails = 0;
+      const first = liveSeq === null; liveSeq = r.seq;
+      if (!first && r.accounts.length && (S.acct === '*' || r.accounts.includes(S.acct))) liveRefresh();
+      if (first) await sleep(500);
+    } catch { fails++; await sleep(Math.min(30000, 2000 * 2 ** Math.min(fails, 4))); }
+  }
+})();

@@ -111,11 +111,14 @@ export function snippet(text: string, n = 180): string {
 const MAX_INDIVIDUAL = 5, MAX_AI_PER_CYCLE = 3;
 let checking = false, lastMail = 0;
 
-export async function checkMail(now = Date.now(), s = getSettings()): Promise<number> {
-  if (checking) return 0; checking = true; let pushed = 0;
+let again = false;
+export async function checkMail(now = Date.now(), s = getSettings(), only?: string): Promise<number> {
+  if (checking) { again = true; return 0; } // ya hay una revisión en curso: al terminar se repite (así un correo que llega justo entonces no espera al sondeo)
+  checking = true; let pushed = 0;
   try {
     const st = state();
     for (const acc of store.loadAccounts()) {
+      if (only && acc.id !== only) continue;
       try {
         const { messages } = await mail.listMessages(acc, "INBOX", { limit: 20, fresh: true }); // conexión propia: no interfiere con la de la interfaz y siempre ve el buzón real
         if (st.reauth?.[acc.id]) { delete st.reauth[acc.id]; }
@@ -147,6 +150,7 @@ export async function checkMail(now = Date.now(), s = getSettings()): Promise<nu
       }
     }
   } finally { checking = false; }
+  if (again) { again = false; pushed += await checkMail(Date.now(), getSettings()); }
   return pushed;
 }
 

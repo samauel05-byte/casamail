@@ -5,6 +5,7 @@ process.env.CASAMAIL_HOME = fs.mkdtempSync(path.join(os.tmpdir(), "casamail-"));
 process.env.CASAMAIL_ARCHIVE = path.join(process.env.CASAMAIL_HOME, "archive");
 process.env.CASAMAIL_IMAP_IDLE_MS = "1500"; // la conexión reutilizada se cierra tras 1,5 s sin uso (para poder probarlo)
 process.env.CASAMAIL_OAUTH_MOCK = "http://127.0.0.1:1300";
+process.env.CASAMAIL_AI_DOWN_MS = "0"; // (los motores caídos no se aparcan: así las pruebas de respaldo son deterministas; la sección de rapidez lo activa)
 const { startImap, startSmtp, startFakeAi, sentMails, startMockOAuth, oauth: mock, lastSystem, fakeStats } = await import("./servers.js");
 const store = await import("../src/store.js");
 const mail = await import("../src/mail.js");
@@ -441,6 +442,28 @@ await t("respaldo: si TODOS fallan, el error explica qué pasó con cada uno", a
 await t("un solo motor: el error es el del propio motor (sin ruido)", async () => {
   store.saveAiEngines([eng(1201, "limitado")]); let m = ""; try { await ai.testAi(); } catch (e) { m = (e as Error).message; } ok(/Rate limit/.test(m) && !/Ningún motor/.test(m), m);
 });
+console.log("  — rapidez de la IA");
+const hang = await mkSrv(1210, "b", () => { /* nunca responde: un motor colgado */ });
+await t("un motor que no responde se abandona a los pocos segundos (antes: 2 minutos) y responde el siguiente", async () => {
+  process.env.CASAMAIL_AI_TIMEOUT_MS = "700"; store.saveAiEngines([eng(1210, "colgado"), okEngine]); ai.resetEngineHealth();
+  const t0 = Date.now(); eq(await ai.testAi(), "OK"); const ms = Date.now() - t0; delete process.env.CASAMAIL_AI_TIMEOUT_MS; ok(ms < 3000, `tardó ${ms} ms`);
+});
+await t("un motor que acaba de fallar se prueba al final durante unos minutos (no se pierde tiempo en él cada vez)", async () => {
+  process.env.CASAMAIL_AI_DOWN_MS = "60000"; ai.resetEngineHealth(); store.saveAiEngines([eng(1201, "limitado"), okEngine]);
+  hits.a = 0; eq(await ai.testAi(), "OK"); eq(hits.a, 1, "la primera vez prueba el principal y falla");
+  eq(await ai.testAi(), "OK"); eq(await ai.testAi(), "OK"); eq(hits.a, 1, "las siguientes ya van directas al que funciona");
+  ai.resetEngineHealth(); await ai.testAi(); eq(hits.a, 2, "al reiniciar la memoria vuelve a probar el principal");
+  store.saveAiEngines([eng(1201, "limitado")]); let m = ""; try { await ai.testAi(); } catch (e) { m = (e as Error).message; } ok(/Rate limit/.test(m), "si es el único motor sigue intentándolo: " + m);
+  process.env.CASAMAIL_AI_DOWN_MS = "0"; ai.resetEngineHealth();
+});
+await t("resúmenes y respuestas se guardan por mensaje: la segunda vez es instantánea y no gasta IA; los fallos no se guardan", async () => {
+  ai.clearAiCache(); store.saveAiEngines([okEngine]); const mk = () => ai.cached("c|INBOX|7|resumen", () => ai.summarize({ from: "a@b.c", subject: "Hola", text: "Texto" }));
+  const c0 = fakeStats.total; const [a1, a2] = await Promise.all([mk(), mk()]); eq(a1, a2); eq(fakeStats.total - c0, 1, "dos peticiones simultáneas comparten una sola llamada a la IA");
+  const t0 = Date.now(); eq(await mk(), a1); ok(Date.now() - t0 < 20 && fakeStats.total - c0 === 1, "la tercera sale de la memoria");
+  let n = 0; const bad = () => ai.cached("k-fallo", async () => { n++; throw new Error("sin red"); }); await bad().catch(() => {}); await bad().catch(() => {}); eq(n, 2, "un fallo se reintenta");
+  ai.clearAiCache(); await mk(); eq(fakeStats.total - c0, 2, "al cambiar el motor o el perfil se vuelve a calcular");
+});
+hang.close(); hang.closeAllConnections?.();
 await t("sin motores configurados: mensaje claro con la salida gratuita", async () => {
   store.saveAiEngines([]); let m = ""; try { await ai.testAi(); } catch (e) { m = (e as Error).message; } ok(/Ajustes → Yerleny/.test(m) && /gratuitas/.test(m), m);
 });
@@ -628,6 +651,89 @@ await t("registro: si no se puede escribir (disco/permisos), NUNCA rompe la app"
   finally { process.env.CASAMAIL_HOME = prev; delete reqCjs.cache[reqCjs.resolve("../electron/log.cjs")]; }
 });
 
+console.log("\nFirmas con imagen (HTML) como en Outlook");
+{
+  const sg = await import("../src/signature.js");
+  const PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+  store.addAccount(store.buildAccount({ id: "firmas", email: "yo@casa.test", pass: "secreto", user: "yo", imap: { host: "127.0.0.1", port: 1143, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } }));
+  const accF = store.getAccount("firmas");
+  const LOGO = `<table><tr><td><img src="data:image/png;base64,${PNG}" width="120" alt="Logo"></td><td style="font-family:Arial;color:#0a3d7c"><b>Sam Pérez</b><br>Director · <a href="https://casamail.test">casamail.test</a><br>+34 600 000 000</td></tr></table>`;
+
+  await t("limpieza: quita scripts, estilos, formularios, manejadores de eventos y enlaces peligrosos; conserva tablas, colores, enlaces e imágenes", async () => {
+    const dirty = `<div onclick="x()" style="color:red;background:url(javascript:alert(1));position:fixed"><script>alert(1)</script><style>body{}</style><iframe src="https://evil"></iframe><a href="javascript:alert(1)">malo</a><a href="https://ok.test/x" onmouseover="y()">bueno</a><img src="javascript:alert(1)"><img src="https://logo.test/a.png" onerror="z()" alt="a"><img src="data:image/svg+xml;base64,PHN2Zz4="><table><tr><td bgcolor="#fff">celda</td></tr></table><form action="x"><input value="q"></form></div>`;
+    const c = sg.sanitize(dirty);
+    ok(!/script|<style|iframe|onclick|onmouseover|onerror|javascript:|position|<form|<input|svg/i.test(c), "quedó algo peligroso: " + c);
+    ok(c.includes('href="https://ok.test/x"') && c.includes('rel="noopener noreferrer"') && c.includes('src="https://logo.test/a.png"') && c.includes("<td bgcolor=\"#fff\">celda</td>") && c.includes("color:red"), "se perdió algo legítimo: " + c);
+    eq((c.match(/<img/g) ?? []).length, 1, "solo la imagen https es válida");
+    ok(sg.sanitize(`<img src="data:image/png;base64,${PNG}">`).includes("data:image/png;base64"), "las imágenes incrustadas PNG se conservan");
+    ok(!sg.sanitize(`<img src="https://x.test/a.png">`, { images: false }).includes("<img"), "al citar un mensaje ajeno no se conservan imágenes");
+  });
+  await t("texto plano de la firma: saltos de línea, tablas y enlaces", async () => {
+    const t1 = sg.toText(LOGO); ok(t1.includes("Sam Pérez") && t1.includes("Director") && t1.includes("+34 600 000 000") && !t1.includes("<"), t1);
+    eq(sg.toText('<p>Hola</p><p>Mundo</p>'), "Hola\n\nMundo".replace("\n\n", "\n")); ok(sg.toText('<a href="https://x.test/a">Mi web</a>').includes("Mi web (https://x.test/a)"), "el enlace conserva su dirección");
+  });
+  await t("guardar y elegir: principal para mensajes nuevos, otra para respuestas, 'ninguna', y se limpia al guardar", async () => {
+    eq(sg.pick("firmas", undefined, false), null, "sin firmas: nada");
+    const s = sg.save("firmas", { items: [{ id: "principal", name: "Principal", html: LOGO + "<script>x</script>", text: "" }, { id: "corta", name: "Corta", html: "<div>Sam</div>", text: "" }], newDefault: "principal", replyDefault: "corta" });
+    eq(s.items.map((x) => x.name), ["Principal", "Corta"]); ok(!s.items[0].html.includes("script") && s.items[0].text.includes("Sam Pérez"), "se limpia y se deriva el texto");
+    eq(sg.pick("firmas", undefined, false)!.id, "principal"); eq(sg.pick("firmas", undefined, true)!.id, "corta"); eq(sg.pick("firmas", "corta", false)!.id, "corta"); eq(sg.pick("firmas", "", false), null); eq(sg.pick("firmas", "no-existe", false), null);
+    eq(sg.save("firmas", { items: s.items, newDefault: "borrada", replyDefault: "" }).newDefault, "principal", "un predeterminado inválido vuelve a la primera");
+    sg.save("firmas", { items: s.items, newDefault: "principal", replyDefault: "corta" });
+  });
+  await t("la firma de texto antigua (Ajustes → Firma) sigue funcionando como una firma más", async () => {
+    store.saveSettings({ ...store.getSettings(), signatures: { vieja: "Un saludo,\nSam" } }); const s = sg.forAccount("vieja"); eq(s.items.length, 1); eq(s.items[0].text, "Un saludo,\nSam"); eq(s.newDefault, s.items[0].id);
+    store.saveSettings({ ...store.getSettings(), signatures: {} });
+  });
+  await t("componer: el texto lleva '-- ' + firma; el HTML lleva la firma con la imagen como adjunto incrustado (cid), una sola vez aunque se repita", async () => {
+    const out = sg.withSignature({ to: "a@b.c", subject: "Hola", text: "Línea 1\n\nLínea 3 https://x.test" }, sg.pick("firmas", undefined, false));
+    ok(out.text!.startsWith("Línea 1") && out.text!.includes("\n\n-- \nSam Pérez"), out.text!);
+    ok(out.html!.includes("Línea 1<br><br>Línea 3") && out.html!.includes('<a href="https://x.test">') && out.html!.includes("Sam Pérez"), out.html!);
+    const cids = out.attachments!.filter((a) => a.cid); eq(cids.length, 1); ok(out.html!.includes(`src="cid:${cids[0].cid}"`) && !out.html!.includes("data:image"), "la imagen debe ir por cid"); eq(cids[0].contentDisposition, "inline"); eq(cids[0].content, PNG);
+    const dos = sg.withSignature({ to: "a@b.c", subject: "x", text: "t" }, { id: "d", name: "d", html: `<img src="data:image/png;base64,${PNG}"><img src="data:image/png;base64,${PNG}">`, text: "" }); eq(dos.attachments!.filter((a) => a.cid).length, 1, "misma imagen = un solo adjunto");
+    const sin = sg.withSignature({ to: "a@b.c", subject: "x", text: "solo texto" }, null); eq(sin.html, undefined); eq(sin.text, "solo texto"); ok(!sin.attachments, "sin firma el mensaje queda igual (texto plano)");
+    const conAdj = sg.withSignature({ to: "a@b.c", subject: "x", text: "t", attachments: [{ filename: "a.txt", content: "aG9sYQ==", encoding: "base64" }] }, sg.pick("firmas", undefined, false)); eq(conAdj.attachments!.length, 2, "los adjuntos del usuario se conservan");
+  });
+  await t("de punta a punta por SMTP: el destinatario recibe HTML con el logo incrustado (cid), el texto alternativo y el adjunto del usuario", async () => {
+    const n0 = sentMails.length; await mail.sendMessage(accF, sg.withSignature({ to: "ana@empresa.com", subject: "Con firma", text: "Hola Ana,\nTe escribo con mi firma.", attachments: [{ filename: "datos.txt", content: Buffer.from("datos").toString("base64"), encoding: "base64" }] }, sg.pick("firmas", undefined, false)));
+    const m = sentMails[n0]; ok(m, "no llegó"); ok(m.html && m.html.includes("Hola Ana,<br>Te escribo") && m.html.includes("Sam Pérez") && /<img src="data:image\/png/.test(m.html as string), String(m.html)); // (mailparser muestra las imágenes cid como data: al leerlas)
+    ok(m.text!.includes("-- \nSam Pérez"), "texto: " + m.text);
+    const logo = m.attachments.find((a) => a.contentType === "image/png"); ok(logo && logo.cid && logo.contentDisposition === "inline" && logo.related === true, "el logo viaja como imagen incrustada (cid, inline, related): " + JSON.stringify({ cid: logo?.cid, d: logo?.contentDisposition, r: logo?.related })); eq(logo!.content.toString("base64"), PNG);
+    ok(m.attachments.some((a) => a.filename === "datos.txt"), "el adjunto del usuario sigue ahí");
+  });
+  await t("responder: la firma va ENTRE la respuesta y el mensaje citado (como Outlook), en HTML y en texto", async () => {
+    { const { ImapFlow: IF } = await import("imapflow"); const c = new IF({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await c.connect();
+      await c.append("INBOX", await new MailComposer({ from: "Ana Pérez <ana@empresa.com>", to: "yo@casa.test", subject: "Presupuesto de firmas", text: "Hola, adjunto el presupuesto de marzo.\nSaludos", messageId: "<firmas-1@x>", date: new Date() }).compile().build(), []); await c.logout(); mail.dropConnection("firmas"); }
+    const inbox = (await mail.listMessages(accF, "INBOX", { limit: 20 })).messages.find((x) => x.subject === "Presupuesto de firmas")!, orig = await mail.getMessage(accF, "INBOX", inbox.uid, false), word = orig.text.trim().split(/\s+/)[0]; const n0 = sentMails.length;
+    await mail.replyTo(accF, "INBOX", inbox.uid, { text: "Confirmado, gracias." }, sg.pick("firmas", undefined, true)); const m = sentMails[n0];
+    const t = m.text!, h = m.html as string; ok(t.indexOf("Confirmado") < t.indexOf("-- \nSam") && t.indexOf("-- \nSam") < t.indexOf("escribió:") && t.includes("> " + orig.text.split("\n")[0]), t);
+    ok(h.indexOf("Confirmado") < h.indexOf("Sam") && h.indexOf("Sam") < h.indexOf("escribió:") && h.includes("<blockquote") && h.includes(word), h);
+    eq(m.subject, /^re:/i.test(orig.subject) ? orig.subject : "Re: " + orig.subject); ok(!!m.inReplyTo, "el hilo se conserva");
+    const n1 = sentMails.length; await mail.replyTo(accF, "INBOX", inbox.uid, { text: "Sin firma" }, null); eq(sentMails[n1].html, false, "sin firma sigue siendo texto plano"); ok(sentMails[n1].text!.includes("> " + orig.text.split("\n")[0]), "y cita igual");
+  });
+
+  console.log("  — importar la firma desde un correo enviado");
+  const outlook = `<html><body><div><p class=MsoNormal>Hola Ana, adjunto el contrato. Dime algo.</p><p class=MsoNormal>Gracias</p><p class=MsoNormal>&nbsp;</p><p class=MsoNormal><b>Sam Pérez</b></p><p class=MsoNormal>Director comercial</p><p class=MsoNormal><img src="data:image/png;base64,${PNG}" width=140 alt="Logo"></p><p class=MsoNormal>+34 600 000 000</p><div id="divRplyFwdMsg"><hr><p>De: Ana</p></div><blockquote>Mensaje anterior larguísimo con otra <img src="data:image/png;base64,${PNG}"></blockquote></div></body></html>`;
+  await t("Outlook de escritorio (sin marcas): toma el bloque final con el logo y sus líneas (nombre, cargo) y NO el texto del correo ni lo citado", async () => {
+    const s = sg.extractSignature(outlook)!; ok(s, "no encontró nada"); ok(s.includes("Sam Pérez") && s.includes("Director comercial") && s.includes("<img") && s.includes("+34 600"), s); ok(!s.includes("adjunto el contrato") && !s.includes("Mensaje anterior") && !s.includes("De: Ana"), "se coló texto que no es firma: " + s);
+  });
+  await t("webmail y otros: Roundcube, Thunderbird, Gmail y el separador '-- '", async () => {
+    const rc = sg.extractSignature(`<html><body><p>Hola</p><div id="_rc_sig"><div>--</div><b>Sam</b><br><img src="https://logo.test/l.png"></div></body></html>`)!; ok(rc.includes("Sam") && rc.includes("logo.test") && !rc.includes("Hola"), rc);
+    const tb = sg.extractSignature(`<html><body><p>Texto del correo</p><div class="moz-signature">-- <br><b>Sam</b><br>Tel 123</div></body></html>`)!; ok(tb.includes("Sam") && tb.includes("Tel 123") && !tb.includes("Texto del correo"), tb);
+    const gm = sg.extractSignature(`<div dir="ltr">Cuerpo<br><div class="gmail_signature"><div>Sam<br><img src="https://l.test/a.png"></div></div></div><div class="gmail_quote">citado</div>`)!; ok(gm.includes("Sam") && !gm.includes("citado") && !gm.includes("Cuerpo"), gm);
+    const dash = sg.extractSignature(`<html><body><p>Cuerpo del mensaje</p><p>-- </p><p>Sam Pérez</p><p>Tel 555</p></body></html>`)!; ok(dash.includes("Sam Pérez") && !dash.includes("Cuerpo"), dash);
+  });
+  await t("un correo sin firma no inventa una; y lo que se importa siempre sale limpio", async () => {
+    eq(sg.extractSignature(`<html><body><p>Hola</p><p>Esto es todo el mensaje, sin firma ni logo.</p><p>Hasta luego</p></body></html>`), null);
+    const x = sg.extractSignature(`<div id="Signature"><script>alert(1)</script><b onclick="x()">Sam</b><img src="https://l.test/a.png" onerror="y()"></div>`)!; ok(x.includes("Sam") && !/script|onclick|onerror/.test(x), x);
+  });
+  await t("desde la carpeta Enviados: lee los correos que enviaste (imágenes cid → incrustadas) y encuentra la firma con su logo", async () => {
+    const samples = await mail.sentSamples(accF, 10); ok(samples.length >= 1, "no leyó Enviados"); const s = samples.find((x) => x.subject === "Con firma")!; ok(s && s.html.includes("data:image/png;base64") && !s.html.includes("cid:"), "las imágenes cid deben convertirse: " + (s?.html ?? "").slice(0, 300));
+    const sig = sg.extractSignature(s.html)!; ok(sig && sig.includes("Sam Pérez") && sig.includes("<img") && !sig.includes("Hola Ana"), "firma extraída: " + sig);
+    const again = sg.withSignature({ to: "a@b.c", subject: "x", text: "t" }, { id: "i", name: "Importada", html: sig, text: sg.toText(sig) }); ok(again.attachments!.some((a) => a.cid), "la firma importada vuelve a salir con su logo");
+  });
+  store.removeAccount("firmas");
+}
+
 console.log("\nAvisos: correo nuevo con resumen, reuniones y recordatorios");
 {
   const notify = await import("../src/notify.js"); const cal = await import("../src/calendar.js"); const { ImapFlow } = await import("imapflow");
@@ -794,6 +900,54 @@ console.log("\nAvisos: correo nuevo con resumen, reuniones y recordatorios");
     notify.clearAll(); eq(notify.list(0).items.length, 0);
   });
   seedC.logout().catch(() => {}); mail.closeConnections();
+}
+
+console.log("\nTiempo real (IMAP IDLE): correo nuevo al instante");
+{
+  const idle = await import("../src/idle.js"); const notify = await import("../src/notify.js"); const net = await import("node:net"); const { ImapFlow } = await import("imapflow");
+  for (const a of store.loadAccounts()) store.removeAccount(a.id);
+  const ps = { conns: 0, open: new Set<import("node:net").Socket>() };
+  const proxy = net.createServer((c) => { ps.conns++; ps.open.add(c); c.on("close", () => ps.open.delete(c)); const up = net.connect(1143, "127.0.0.1"); c.on("data", (d) => up.write(d)); up.on("data", (d) => c.write(d)); c.on("close", () => up.destroy()); up.on("close", () => c.destroy()); c.on("error", () => up.destroy()); up.on("error", () => c.destroy()); });
+  await new Promise<void>((r) => proxy.listen(1146, "127.0.0.1", r));
+  store.addAccount(store.buildAccount({ id: "vivo", email: "yo@casa.test", pass: "secreto", user: "yo", imap: { host: "127.0.0.1", port: 1146, secure: false }, smtp: { host: "127.0.0.1", port: 1025, secure: false } }));
+  const other = async (fn: (c: InstanceType<typeof ImapFlow>) => Promise<void>) => { const c = new ImapFlow({ host: "127.0.0.1", port: 1143, secure: false, auth: { user: "yo", pass: "secreto" }, logger: false }); await c.connect(); try { await fn(c); } finally { await c.logout().catch(() => {}); } };
+  const wait = async (cond: () => boolean, ms: number) => { const t0 = Date.now(); while (!cond() && Date.now() - t0 < ms) await new Promise((r) => setTimeout(r, 25)); return Date.now() - t0; };
+  const raw = (subj: string) => Buffer.from(`From: Marta Ruiz <marta@estudio.es>\r\nTo: yo@casa.test\r\nSubject: ${subj}\r\nDate: ${new Date().toUTCString()}\r\nMessage-ID: <${Date.now()}${Math.random()}@x>\r\n\r\nHola, esto es ${subj}`);
+  store.saveAiEngines([]); notify.saveSettings({ enabled: true, mail: true, aiSummary: false, meetings: false });
+  await notify.checkMail(); // base: lo que ya había no se avisa
+  idle.sync(); await wait(() => ps.open.size >= 1, 4000);
+
+  await t("una conexión en espera por cuenta (IDLE), sin marcar nada como leído", async () => { await new Promise((r) => setTimeout(r, 400)); eq(ps.open.size, 1); });
+  await t("correo nuevo: la interfaz se entera y el aviso sale en ~1 s (sin esperar al sondeo de 1 minuto)", async () => {
+    const seq = idle.lastSeq(), last = notify.list().last, t0 = Date.now();
+    const w = idle.waitChange(seq, 6000); await other((c) => c.append("INBOX", raw("Llegada instantánea"), []).then(() => {}));
+    const r = await w; ok(r.accounts.includes("vivo"), "no avisó de la cuenta: " + JSON.stringify(r)); const tChange = Date.now() - t0;
+    await wait(() => notify.list(last).items.length > 0, 4000); const tNotif = Date.now() - t0;
+    const n = notify.list(last).items[0]; ok(n && n.body.includes("Llegada instantánea"), "sin aviso: " + JSON.stringify(n)); ok(tChange < 2500 && tNotif < 3500, `demasiado lento: cambio ${tChange} ms, aviso ${tNotif} ms`);
+    console.log(`      (cambio en ${tChange} ms, aviso en ${tNotif} ms)`);
+  });
+  await t("correo leído o borrado desde otro dispositivo también se refleja al instante", async () => {
+    let seq = idle.lastSeq(); let w = idle.waitChange(seq, 6000); await other(async (c) => { await c.mailboxOpen("INBOX"); const u = ((await c.search({ all: true }, { uid: true })) || [])[0]; await c.messageFlagsAdd(String(u), ["\\Seen"], { uid: true }); });
+    ok((await w).accounts.includes("vivo"), "cambio de estado no detectado");
+    seq = idle.lastSeq(); w = idle.waitChange(seq, 6000); await other(async (c) => { await c.mailboxOpen("INBOX"); const u = ((await c.search({ all: true }, { uid: true })) || [])[0]; await c.messageDelete(String(u), { uid: true }); });
+    ok((await w).accounts.includes("vivo"), "borrado no detectado");
+  });
+  await t("varios correos seguidos: un solo aviso por correo, ninguno repetido", async () => {
+    const last = notify.list().last; await other(async (c) => { for (let i = 0; i < 3; i++) await c.append("INBOX", raw("Ráfaga " + i), []); });
+    await wait(() => notify.list(last).items.filter((x) => x.kind === "mail").length >= 3, 6000); await new Promise((r) => setTimeout(r, 1500));
+    const bodies = notify.list(last).items.filter((x) => x.kind === "mail").map((x) => x.body.split("\n")[0]).sort(); eq(bodies, ["Ráfaga 0", "Ráfaga 1", "Ráfaga 2"]);
+  });
+  await t("si se cae la conexión, se reconecta sola y sigue avisando", async () => {
+    for (const s of ps.open) s.destroy(); await wait(() => ps.open.size === 0, 2000); const before = ps.conns; await wait(() => ps.conns > before && ps.open.size === 1, 8000); eq(ps.open.size, 1, "no se reconectó");
+    const last = notify.list().last; await other((c) => c.append("INBOX", raw("Tras reconexión"), []).then(() => {})); await wait(() => notify.list(last).items.length > 0, 5000); ok(notify.list(last).items[0]?.body.includes("Tras reconexión"), "no avisó tras reconectar");
+  });
+  await t("contraseña mala: reintenta con esperas crecientes, sin fugas de conexiones ni bucle rápido", async () => {
+    idle.stopAll(); await wait(() => ps.open.size === 0, 3000); store.updateAccount("vivo", (a) => ({ ...a, pass: "mala" })); const c0 = ps.conns; idle.sync(); await new Promise((r) => setTimeout(r, 5000));
+    ok(ps.conns - c0 <= 3, "demasiados intentos: " + (ps.conns - c0)); ok(ps.open.size <= 1, "conexiones abiertas: " + ps.open.size);
+    store.updateAccount("vivo", (a) => ({ ...a, pass: "secreto" })); idle.sync(); await wait(() => ps.open.size === 1, 6000); eq(ps.open.size, 1, "al corregir la contraseña debe volver a vigilar");
+  });
+  await t("al quitar la cuenta se cierra su vigilante (no quedan conexiones abiertas)", async () => { store.removeAccount("vivo"); idle.sync(); await wait(() => ps.open.size === 0, 4000); eq(ps.open.size, 0); });
+  idle.stopAll(); mail.closeConnections(); proxy.close();
 }
 
 console.log("\nModo remoto (app Android): seguridad");
