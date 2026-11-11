@@ -247,6 +247,22 @@ public final class Api {
         return enviados;
     }
 
+    /** Correo nuevo sin leer desde la última vez, de todas las cuentas: [{uid, cuenta, titulo, cuerpo}]. La primera vez solo toma nota (no avisa de lo que ya había). */
+    public synchronized JSONArray avisos() {
+        JSONArray out = new JSONArray();
+        for (Cuenta c : cuentas()) {
+            try {
+                String clave = "visto:" + c.id, v = alm.leer(clave); long desde = v == null ? -1 : Long.parseLong(v); long[] max = new long[1];
+                JSONArray n = correo.nuevos(c, desde, max); alm.guardar(clave, String.valueOf(max[0]));
+                for (int i = 0; i < n.length() && out.length() < 20; i++) {
+                    JSONObject m = n.getJSONObject(i);
+                    out.put(new JSONObject().put("uid", m.optLong("uid")).put("cuenta", c.id).put("titulo", m.optString("from", c.email)).put("cuerpo", m.optString("subject", "(sin asunto)")));
+                }
+            } catch (Exception ignored) { /* sin red o contraseña caducada: se reintenta en la próxima */ }
+        }
+        return out;
+    }
+
     // ---------- calendario sencillo (guardado en el teléfono) ----------
     private Respuesta calendario(String m, String r, Map<String, String> q, JSONObject b) throws Exception {
         JSONArray ev = new JSONArray(alm.leer("eventos") == null ? "[]" : alm.leer("eventos"));

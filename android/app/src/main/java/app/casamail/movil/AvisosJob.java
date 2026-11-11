@@ -59,7 +59,7 @@ public class AvisosJob extends JobService {
     static void consultar(Context ctx) throws Exception {
         SharedPreferences prefs = ctx.getSharedPreferences("casamail", Context.MODE_PRIVATE);
         String server = prefs.getString("server", null), token = prefs.getString("token", null);
-        if (server == null || token == null) return;
+        if (server == null || token == null) { avisosNativos(ctx); return; }
         long ultimo = prefs.getLong("avisos_ultimo", -1);
         JSONObject r = new JSONObject(get(server, token, "/api/notifications?after=" + Math.max(ultimo, 0)));
         JSONArray items = r.getJSONArray("items"); // del más nuevo al más antiguo
@@ -109,5 +109,17 @@ public class AvisosJob extends JobService {
             if (pi != null) { am.cancel(pi); pi.cancel(); }
         }
         prefs.edit().putStringSet("alarmas", nuevos).apply();
+    }
+
+    /** Modo independiente: envía lo pendiente de la bandeja de salida y avisa del correo nuevo de cada cuenta (comprobando directamente su servidor IMAP). */
+    static void avisosNativos(Context ctx) {
+        if (!Nativo.hayCuentas(ctx)) return;
+        app.casamail.movil.core.Api api = Nativo.api(ctx);
+        api.procesarBandeja(System.currentTimeMillis());
+        JSONArray n = api.avisos();
+        if (MainActivity.visible) return;                                        // con la app abierta ya se ven dentro
+        for (int i = 0; i < n.length() && i < 8; i++) {
+            try { JSONObject m = n.getJSONObject(i); Notifs.mostrar(ctx, (int) (m.getLong("uid") * 31 + m.getString("cuenta").hashCode()), Notifs.CH_MAIL, m.optString("titulo"), m.optString("cuerpo"), m.getLong("uid"), m.getString("cuenta")); } catch (Exception ignored) { }
+        }
     }
 }

@@ -124,6 +124,7 @@ async function init() {
   S.foldersAt = 0; if (S.acct === LOCAL) { await folders(true); await list(); } else await Promise.all([list(), folders(true)]); outboxCount();
 }
 function renderWelcome() {
+  if (window.casaNativo) return nativoBienvenida();   // app Android independiente: Iniciar sesión / Crear cuenta
   $('#list').innerHTML = '';
   $('#view').innerHTML = `<div class="empty" style="min-height:100%"><div style="margin-bottom:8px">${LOGO(150)}</div>
     <h3 style="font-size:26px;letter-spacing:-.02em">Bienvenido a CasaMail</h3>
@@ -434,7 +435,7 @@ $('#send').onclick = () => doSend(false);
 $('#sendnow').onclick = () => { if (confirm('Se enviará ahora mismo y ya no podrás retirarlo. ¿Continuar?')) doSend(true); };
 
 /* ---------- IA ---------- */
-function needAi() { if (S.aiOk) return true; toast('Yerleny necesita un modelo de IA para pensar. Conéctalo en Ajustes (puede ser gratis y local con Ollama).', { action: 'Conectar', onAction: () => settings('ia'), ms: 12000 }); return false; }
+function needAi() { if (S.aiOk) return true; if (window.casaNativo) { toast('Yerleny (la IA) llegará pronto a la versión independiente de la app.'); return false; } toast('Yerleny necesita un modelo de IA para pensar. Conéctalo en Ajustes (puede ser gratis y local con Ollama).', { action: 'Conectar', onAction: () => settings('ia'), ms: 12000 }); return false; }
 const SUGG = ['Dame mi resumen del día', 'Resume mis correos sin leer', '¿Qué facturas me llegaron?', 'Busca lo último de mi jefe', 'Prepara una respuesta amable al último mensaje'];
 function drawerOpen() { warmAi(); $('#drawer').hidden = false; if (!$('#chat').children.length) chatIntro(); $('#ci').focus(); }
 function chatIntro() {
@@ -486,11 +487,13 @@ async function tabCuentas(c, pre, extra) {
     <h4>Añadir cuenta</h4>
     <div class="add-cards">
       <button class="add-card nuevo" id="crearcuenta2"><span class="mk" style="background:var(--brand)">+</span><b>Crear un correo nuevo</b><span>¿No tienes correo? Gmail, Outlook, Yahoo, iCloud o Zoho: te llevamos al registro y la conectamos.</span></button>
+      ${window.casaNativo ? `<button class="add-card" id="nlogin2"><span class="mk" style="background:var(--brand)">@</span><b>Iniciar sesión con otro correo</b><span>Gmail, Outlook, Yahoo, iCloud, tu dominio…</span></button>` : ''}
       <button class="add-card" data-add="google"><span class="mk" style="background:${provMark.google[1]}">G</span><b>Gmail / Google</b><span>Inicio de sesión seguro con OAuth. Sin contraseñas.</span></button>
       <button class="add-card" data-add="microsoft"><span class="mk" style="background:${provMark.microsoft[1]}">M</span><b>Outlook / Microsoft</b><span>Outlook.com, Hotmail y Microsoft 365 con OAuth.</span></button>
       <button class="add-card" data-add="imap"><span class="mk" style="background:${provMark.imap[1]}">@</span><b>Otra cuenta (IMAP)</b><span>Yahoo, iCloud, Fastmail, tu dominio…</span></button>
     </div><div id="addpane"></div>`;
   $$('[data-add]').forEach(b => b.onclick = () => addPane(b.dataset.add));
+  if (window.casaNativo) { $$('[data-add]').forEach(b => { b.hidden = true; }); $('#nlogin2').onclick = () => nativoLogin(); }
   $('#crearcuenta2').onclick = () => crearCuenta();
   $$('[data-recon]').forEach(b => b.onclick = () => addPane(b.dataset.recon, b.dataset.email));
   $$('[data-del]').forEach(b => b.onclick = async () => { if (confirm('¿Quitar esta cuenta de CasaMail? (No borra tus correos.)')) { await api('/api/accounts/' + encodeURIComponent(b.dataset.del), undefined, 'DELETE'); await init(); settings('cuentas'); } });
@@ -498,6 +501,7 @@ async function tabCuentas(c, pre, extra) {
 }
 const copyBtn = t => `<button class="iconbtn sm" data-copy="${esc(t)}" aria-label="Copiar" title="Copiar">${I('copy', 'sm')}</button>`;
 async function addPane(kind, hint, preset) {
+  if (window.casaNativo) return nativoLogin(hint && hint.includes('@') ? hint : '');   // app independiente: sin OAuth, inicio de sesión directo
   $$('.add-card').forEach(b => b.classList.toggle('on', b.dataset.add === kind)); const p = $('#addpane'); p.className = 'pane-add';
   if (kind === 'imap') {
     const pr = await api('/api/presets');
