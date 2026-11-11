@@ -141,6 +141,37 @@ public class CorreoTest {
             JSONArray n = api.correo().nuevos(api.cuentas().get(0), base, max); igual(n.length(), 1, "uno nuevo"); afirmar(n.getJSONObject(0).getString("subject").equals("Aviso nuevo") && n.getJSONObject(0).getString("from").contains("Marta"), n.toString()); afirmar(max[0] > base, "uid máximo sube");
             igual(api.correo().nuevos(api.cuentas().get(0), max[0], new long[1]).length(), 0, "sin repetir");
         });
+        // ----- confirmaciones de lectura (acuses MDN) -----
+        t("pedir acuse: el correo enviado lleva la cabecera Disposition-Notification-To", () -> {
+            JSONObject r = obj("POST", "/api/send?account=yo_casa_test", "{\"to\":\"ana@empresa.com\",\"subject\":\"Con acuse\",\"text\":\"leelo\",\"now\":true,\"readReceipt\":true}"); afirmar(r.optBoolean("sent"), r.toString());
+            JSONArray ms = obj("GET", "/api/messages?account=yo_casa_test&folder=Sent&limit=10", null).getJSONArray("messages"); long u = 0; for (int i = 0; i < ms.length(); i++) if (ms.getJSONObject(i).getString("subject").equals("Con acuse")) u = ms.getJSONObject(i).getLong("uid");
+            afirmar(u > 0, "no está en Enviados"); JSONObject m = obj("GET", "/api/message/" + u + "?account=yo_casa_test&folder=Sent", null);
+            afirmar(!m.isNull("receiptTo") && m.getString("receiptTo").contains("yo@casa.test"), "falta Disposition-Notification-To: " + m.opt("receiptTo"));
+        });
+        t("me piden acuse: se detecta (wantsReceipt) y se envía la confirmación al remitente", () -> {
+            String raw = "From: Ana <ana@empresa.com>\r\nTo: yo@casa.test\r\nSubject: Necesito acuse\r\nMessage-ID: <pide-1@empresa.com>\r\nDisposition-Notification-To: ana@empresa.com\r\n\r\nAbre esto, por favor.\r\n";
+            try (Store st = directo()) { Folder f = st.getFolder("INBOX"); f.open(Folder.READ_WRITE); f.appendMessages(new Message[]{new MimeMessage(Session.getInstance(new Properties()), new java.io.ByteArrayInputStream(raw.getBytes("UTF-8")))}); f.close(false); }
+            JSONArray ms = obj("GET", "/api/messages?account=yo_casa_test&folder=INBOX&limit=20", null).getJSONArray("messages"); long u = 0; for (int i = 0; i < ms.length(); i++) if (ms.getJSONObject(i).getString("subject").equals("Necesito acuse")) u = ms.getJSONObject(i).getLong("uid");
+            afirmar(u > 0, "no encuentro el mensaje"); JSONObject m = obj("GET", "/api/message/" + u + "?account=yo_casa_test&folder=INBOX", null);
+            afirmar(m.optBoolean("wantsReceipt") && m.optString("receiptTo").contains("ana@empresa.com"), "no detecta la petición de acuse: " + m);
+            igual(obj("POST", "/api/message/" + u + "/receipt?account=yo_casa_test&folder=INBOX", "{}").optString("to"), "ana@empresa.com", "destino del acuse");
+        });
+        t("recibir una confirmación: se registra (no se anuncia) y el correo original figura como leído", () -> {
+            api.avisos(); // fija la base de 'visto' para esta cuenta
+            String origId = "<orig-xyz@casa.test>";
+            String mdn = "From: Ana <ana@empresa.com>\r\nTo: yo@casa.test\r\nSubject: Lectura confirmada\r\nMIME-Version: 1.0\r\n" +
+                    "Content-Type: multipart/report; report-type=disposition-notification; boundary=\"BB\"\r\n\r\n" +
+                    "--BB\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nTu mensaje fue leído.\r\n\r\n" +
+                    "--BB\r\nContent-Type: message/disposition-notification\r\n\r\nReporting-UA: X\r\nFinal-Recipient: rfc822;ana@empresa.com\r\nOriginal-Message-ID: " + origId + "\r\nDisposition: manual-action/MDN-sent-manually; displayed\r\n\r\n--BB--\r\n";
+            String orig = "From: yo <yo@casa.test>\r\nTo: ana@empresa.com\r\nSubject: Mi mensaje original\r\nMessage-ID: " + origId + "\r\n\r\nhola\r\n";
+            try (Store st = directo()) { Folder f = st.getFolder("INBOX"); f.open(Folder.READ_WRITE);
+                f.appendMessages(new Message[]{ new MimeMessage(Session.getInstance(new Properties()), new java.io.ByteArrayInputStream(mdn.getBytes("UTF-8"))),
+                        new MimeMessage(Session.getInstance(new Properties()), new java.io.ByteArrayInputStream(orig.getBytes("UTF-8"))) }); f.close(false); }
+            JSONArray avisos = api.avisos(); afirmar(!avisos.toString().contains("Lectura confirmada"), "el acuse no debe anunciarse como correo: " + avisos);
+            JSONArray ms = obj("GET", "/api/messages?account=yo_casa_test&folder=INBOX&limit=30", null).getJSONArray("messages"); long u = 0; for (int i = 0; i < ms.length(); i++) if (ms.getJSONObject(i).getString("subject").equals("Mi mensaje original")) u = ms.getJSONObject(i).getLong("uid");
+            afirmar(u > 0, "no encuentro el original"); JSONObject m = obj("GET", "/api/message/" + u + "?account=yo_casa_test&folder=INBOX", null);
+            afirmar(!m.isNull("receipt") && m.getJSONObject("receipt").getString("readAt").length() > 0, "el original debería figurar como leído: " + m.opt("receipt"));
+        });
         t("si el servidor corta la conexión, se reconecta sola", () -> {
             api.correo().cerrarTodo(); afirmar(obj("GET", "/api/messages?account=yo_casa_test&folder=INBOX&limit=1", null).getInt("total") > 0, "no reconectó");
         });

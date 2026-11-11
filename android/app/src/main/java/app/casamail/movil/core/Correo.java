@@ -21,6 +21,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Properties;
 import java.util.TimeZone;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import javax.mail.Address;
@@ -132,6 +133,7 @@ public final class Correo {
     private static final Pattern RE_TRASH = Pattern.compile("trash|papelera|basura|eliminados|deleted", Pattern.CASE_INSENSITIVE),
             RE_SENT = Pattern.compile("sent|enviad", Pattern.CASE_INSENSITIVE), RE_DRAFT = Pattern.compile("draft|borrador", Pattern.CASE_INSENSITIVE),
             RE_JUNK = Pattern.compile("junk|spam|correo no deseado|no deseado", Pattern.CASE_INSENSITIVE), RE_ARCH = Pattern.compile("archive|archivo|all mail|todos", Pattern.CASE_INSENSITIVE);
+    private static final Pattern RE_MDN_ORIG = Pattern.compile("Original-Message-ID:\\s*(<[^>]+>)", Pattern.CASE_INSENSITIVE);
 
     private static String especial(IMAPFolder f) {
         try { for (String a : f.getAttributes()) { String x = a.toLowerCase(Locale.ROOT); for (String k : new String[]{"\\sent", "\\drafts", "\\trash", "\\junk", "\\archive", "\\all"}) if (x.equals(k)) return k.equals("\\all") ? "\\Archive" : "\\" + Character.toUpperCase(k.charAt(1)) + k.substring(2); } } catch (MessagingException ignored) { }
@@ -236,8 +238,13 @@ public final class Correo {
     private static final class Partes {
         final StringBuilder texto = new StringBuilder(); final StringBuilder html = new StringBuilder();
         final List<Part> adjuntos = new ArrayList<>(); final Map<String, Part> cid = new HashMap<>();
+        String dnOriginalId = null; // si es una confirmación de lectura (MDN): el Message-ID del correo original
     }
     private static void recorrer(Part p, Partes out) throws MessagingException, IOException {
+        if (p.isMimeType("message/disposition-notification")) { // la parte del acuse de lectura: saca a qué correo confirma
+            try { Matcher mt = RE_MDN_ORIG.matcher(new String(leer(p.getInputStream()), "UTF-8")); if (mt.find()) out.dnOriginalId = mt.group(1); } catch (Exception ignored) { }
+            return;
+        }
         if (p.isMimeType("multipart/*")) { Multipart mp = (Multipart) p.getContent(); for (int i = 0; i < mp.getCount(); i++) recorrer(mp.getBodyPart(i), out); return; }
         if (p.isMimeType("message/rfc822")) { Object o = p.getContent(); if (o instanceof Part) { Partes sub = new Partes(); recorrer((Part) o, sub); out.texto.append(sub.texto); } return; }
         String disp = p.getDisposition(); String nombre = null; try { nombre = p.getFileName(); } catch (Exception ignored) { }
@@ -284,9 +291,11 @@ public final class Correo {
                 if (marcarLeido && !m.isSet(Flags.Flag.SEEN)) m.setFlag(Flags.Flag.SEEN, true);
                 String[] refs = m.getHeader("References"); JSONArray rf = new JSONArray(); if (refs != null && refs.length > 0) for (String r : refs[0].trim().split("\\s+")) if (!r.isEmpty()) rf.put(r);
                 String[] mid = m.getHeader("Message-ID");
+                String[] dnt = m.getHeader("Disposition-Notification-To");
                 return new JSONObject().put("uid", uid).put("subject", m.getSubject() == null ? "(sin asunto)" : decod(m.getSubject())).put("from", dir(m.getFrom())).put("to", dir(m.getRecipients(Message.RecipientType.TO)))
                         .put("cc", dir(m.getRecipients(Message.RecipientType.CC))).put("date", m.getSentDate() != null ? iso(m.getSentDate()) : JSONObject.NULL).put("unread", false).put("starred", m.isSet(Flags.Flag.FLAGGED))
                         .put("hasAttachments", adj.length() > 0).put("messageId", mid != null && mid.length > 0 ? mid[0] : JSONObject.NULL).put("references", rf)
+                        .put("dispositionNotificationTo", dnt != null && dnt.length > 0 ? decod(dnt[0]) : JSONObject.NULL).put("mdnFor", ps.dnOriginalId != null ? ps.dnOriginalId : JSONObject.NULL)
                         .put("text", texto).put("html", html == null ? JSONObject.NULL : html).put("attachments", adj);
             } catch (MessagingException | JSONException | IOException e) { throw new ErrorCorreo("No se pudo abrir el mensaje: " + causa(e), "conexion"); }
             finally { cerrarCarpeta(f); }
@@ -368,6 +377,7 @@ public final class Correo {
             if (!cc.trim().isEmpty()) msg.setRecipients(Message.RecipientType.CC, InternetAddress.parse(cc, false));
             if (!bcc.trim().isEmpty()) msg.setRecipients(Message.RecipientType.BCC, InternetAddress.parse(bcc, false));
             msg.setSubject(d.optString("subject"), "UTF-8"); msg.setSentDate(new Date());
+            if (d.optBoolean("readReceipt")) { msg.setHeader("Disposition-Notification-To", c.email); msg.setHeader("Return-Receipt-To", c.email); } // pedir confirmación de lectura
             if (d.optString("inReplyTo").length() > 0) msg.setHeader("In-Reply-To", d.getString("inReplyTo"));
             JSONArray refs = d.optJSONArray("references"); if (refs != null && refs.length() > 0) { StringBuilder sb = new StringBuilder(); for (int i = 0; i < refs.length(); i++) sb.append(i > 0 ? " " : "").append(refs.getString(i)); msg.setHeader("References", sb.toString()); }
             String texto = d.optString("text", ""), html = d.optString("html", "");
@@ -408,6 +418,57 @@ public final class Correo {
         if (c.smtpHost.toLowerCase(Locale.ROOT).contains("gmail")) return;
         try { guardarEn(c, "\\Sent", msg, new Flags(Flags.Flag.SEEN)); } catch (ErrorCorreo ignored) { /* el correo salió: la copia es opcional */ }
     }
+    /** Envía una confirmación de lectura (MDN) al remitente del correo `orig` ({from, subject, messageId, dispositionNotificationTo}). Devuelve el destino. */
+    public String enviarAcuse(Cuenta c, JSONObject orig) throws ErrorCorreo {
+        String to;
+        MimeMessage msg;
+        try {
+            String dnt = orig.isNull("dispositionNotificationTo") ? "" : orig.optString("dispositionNotificationTo");
+            String destStr = dnt.trim().isEmpty() ? orig.optString("from") : dnt;
+            InternetAddress[] da = InternetAddress.parse(destStr, false);
+            to = da.length > 0 ? da[0].getAddress() : null;
+            if (to == null || !to.contains("@")) throw new ErrorCorreo("El correo no indica a dónde enviar la confirmación.", "datos");
+            String subj = orig.optString("subject", "(sin asunto)").replaceAll("[\\r\\n]+", " ");
+            String origId = orig.isNull("messageId") ? "" : orig.optString("messageId").trim();
+            if (!origId.isEmpty() && !origId.startsWith("<")) origId = "<" + origId + ">";
+            String fecha = new SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss Z", Locale.US).format(new Date());
+
+            msg = new MimeMessage(sesion(c));
+            msg.setFrom(new InternetAddress(c.email));
+            msg.setRecipients(Message.RecipientType.TO, new InternetAddress[]{new InternetAddress(to)});
+            msg.setSubject("Leído: " + subj, "UTF-8"); msg.setSentDate(new Date());
+
+            MimeBodyPart humano = new MimeBodyPart();
+            humano.setText("Tu mensaje \"" + subj + "\" fue mostrado (leído) por " + c.email + " el " + fecha + ".\r\n" +
+                    "Esto es una confirmación de lectura automática; no asegura que el contenido se haya leído por completo.", "UTF-8");
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("Reporting-UA: CasaMail\r\n").append("Final-Recipient: rfc822;").append(c.email).append("\r\n");
+            if (!origId.isEmpty()) sb.append("Original-Message-ID: ").append(origId).append("\r\n");
+            sb.append("Disposition: manual-action/MDN-sent-manually; displayed\r\n");
+            MimeBodyPart notif = new MimeBodyPart();
+            notif.setDataHandler(new DataHandler(new ByteArrayDataSource(sb.toString().getBytes("UTF-8"), "message/disposition-notification")));
+            notif.setHeader("Content-Type", "message/disposition-notification");
+
+            MimeMultipart mp = new MimeMultipart("report"); mp.addBodyPart(humano); mp.addBodyPart(notif);
+            msg.setContent(mp); msg.saveChanges();
+            // añade report-type al Content-Type (saveChanges solo deja multipart/report; boundary=...)
+            String ct = msg.getContentType(); msg.setHeader("Content-Type", ct.replaceFirst("(?i)multipart/report", "multipart/report; report-type=disposition-notification"));
+        } catch (ErrorCorreo e) { throw e; }
+        catch (Exception e) { throw new ErrorCorreo("No se pudo preparar la confirmación: " + causa(e), "datos"); }
+        try {
+            Transport t = sesion(c).getTransport("smtp");
+            try { t.connect(c.smtpHost, c.smtpPuerto, c.usuario, c.clave); t.sendMessage(msg, msg.getAllRecipients()); }
+            finally { try { t.close(); } catch (MessagingException ignored) { } }
+        } catch (AuthenticationFailedException e) { throw new ErrorCorreo("El servidor de envío rechazó el usuario o la contraseña.", "reauth");
+        } catch (MessagingException e) { throw new ErrorCorreo("No se pudo enviar la confirmación: " + causa(e), "envio"); }
+        return to;
+    }
+    /** Si el mensaje es una confirmación de lectura (MDN), el Message-ID del correo original; si no, null. */
+    private static String mdnDe(Message m) {
+        try { if (!m.isMimeType("multipart/report")) return null; Partes ps = new Partes(); recorrer(m, ps); return ps.dnOriginalId; }
+        catch (Exception e) { return null; }
+    }
     public void guardarBorrador(Cuenta c, MimeMessage msg) throws ErrorCorreo { guardarEn(c, "\\Drafts", msg, new Flags(Flags.Flag.DRAFT)); }
     private void guardarEn(Cuenta c, String uso, MimeMessage msg, Flags flags) throws ErrorCorreo {
         synchronized (cerrojo(c)) {
@@ -428,7 +489,7 @@ public final class Correo {
                 JSONArray out = new JSONArray(); if (desdeUid < 0 || top <= desdeUid) return out;
                 Message[] ms = f.getMessagesByUID(desdeUid + 1, top); ms = ms == null ? new Message[0] : ms; ArrayList<Message> l = new ArrayList<>(); for (Message m : ms) if (m != null) l.add(m);
                 f.fetch(l.toArray(new Message[0]), PERFIL);
-                for (Message m : l) if (!m.isSet(Flags.Flag.SEEN)) out.put(resumen(f, m));
+                for (Message m : l) if (!m.isSet(Flags.Flag.SEEN)) { JSONObject r = resumen(f, m); String mf = mdnDe(m); if (mf != null) r.put("mdnFor", mf); out.put(r); }
                 return out;
             } catch (MessagingException | JSONException e) { throw new ErrorCorreo("No se pudo comprobar el correo nuevo: " + causa(e), "conexion"); }
             finally { cerrarCarpeta(f); }

@@ -47,6 +47,26 @@ public final class Api {
     }
     private JSONObject jsonAlm(String clave, String def) { try { String s = alm.leer(clave); return new JSONObject(s == null ? def : s); } catch (JSONException e) { try { return new JSONObject(def); } catch (JSONException x) { return new JSONObject(); } } }
 
+    // ---------- confirmaciones de lectura (acuses MDN) ----------
+    private static String normId(String s) { return s == null ? "" : s.trim().replaceAll("[<>]", "").toLowerCase(Locale.ROOT); }
+    /** Guarda, por Message-ID del correo que enviaste, cuándo y quién lo marcó como leído (nos quedamos con la primera lectura). */
+    private synchronized void registrarAcuse(String origId, String readAt, String by) {
+        String k = normId(origId); if (k.isEmpty()) return;
+        try { JSONObject a = jsonAlm("acuses", "{}"); if (a.has(k) || a.length() >= 5000) return; a.put(k, new JSONObject().put("readAt", readAt).put("by", by == null ? "" : by)); alm.guardar("acuses", a.toString()); } catch (JSONException ignored) { }
+    }
+    private JSONObject acuse(String origId) { String k = normId(origId); return k.isEmpty() ? null : jsonAlm("acuses", "{}").optJSONObject(k); }
+    /** Añade al mensaje los campos que espera la interfaz: receipt (si te leyeron), wantsReceipt/receiptTo (si te piden acuse); y registra el acuse si el propio mensaje es uno. */
+    private JSONObject conAcuse(Cuenta c, JSONObject msg) throws JSONException {
+        String dnt = msg.isNull("dispositionNotificationTo") ? null : msg.optString("dispositionNotificationTo");
+        boolean mio = msg.optString("from", "").toLowerCase(Locale.ROOT).contains(c.email.toLowerCase(Locale.ROOT));
+        JSONObject ac = msg.isNull("messageId") ? null : acuse(msg.optString("messageId"));
+        msg.put("receipt", ac == null ? JSONObject.NULL : ac);
+        msg.put("wantsReceipt", dnt != null && !dnt.isEmpty() && !mio);
+        msg.put("receiptTo", dnt == null ? JSONObject.NULL : dnt);
+        if (!msg.isNull("mdnFor")) registrarAcuse(msg.optString("mdnFor"), msg.isNull("date") ? java.time.Instant.now().toString() : msg.optString("date"), msg.optString("from"));
+        return msg;
+    }
+
     // ---------- punto de entrada ----------
     public Respuesta manejar(String metodo, String url, String cuerpo) {
         try {
@@ -116,8 +136,9 @@ public final class Api {
         Matcher mm = RE_MSG.matcher(r);
         if (mm.matches()) {
             Cuenta c = cuenta(q); long uid = Long.parseLong(mm.group(1)); String acc = mm.group(2), f = carpeta(q);
-            if (acc == null) return ok(correo.mensaje(c, f, uid, true));
+            if (acc == null) return ok(conAcuse(c, correo.mensaje(c, f, uid, true)));
             switch (acc) {
+                case "receipt": { JSONObject o = correo.mensaje(c, f, uid, false); return ok(new JSONObject().put("to", correo.enviarAcuse(c, o))); }
                 case "flags": correo.marcar(c, f, uid, b.has("read") ? b.optBoolean("read") : null, b.has("starred") ? b.optBoolean("starred") : null); return ok("{\"ok\":true}");
                 case "trash": correo.papelera(c, f, uid); return ok("{\"ok\":true}");
                 case "archive": destino(c, f, uid, "\\Archive", "Archive"); return ok("{\"ok\":true}");
@@ -262,6 +283,7 @@ public final class Api {
                 JSONArray n = correo.nuevos(c, desde, max); alm.guardar(clave, String.valueOf(max[0]));
                 for (int i = 0; i < n.length() && out.length() < 20; i++) {
                     JSONObject m = n.getJSONObject(i);
+                    if (m.has("mdnFor") && !m.isNull("mdnFor")) { registrarAcuse(m.optString("mdnFor"), m.optString("date", java.time.Instant.now().toString()), m.optString("from", "")); continue; } // es un acuse de lectura: se registra y no se avisa como correo
                     out.put(new JSONObject().put("uid", m.optLong("uid")).put("cuenta", c.id).put("titulo", m.optString("from", c.email)).put("cuerpo", m.optString("subject", "(sin asunto)")));
                 }
             } catch (Exception ignored) { /* sin red o contraseña caducada: se reintenta en la próxima */ }
