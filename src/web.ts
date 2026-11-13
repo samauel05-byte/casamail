@@ -54,12 +54,15 @@ app.disable("x-powered-by");
 app.use(express.json({ limit: "40mb" }));
 
 // Defensa contra DNS-rebinding y CSRF: Host válido + token en cookie.
+const PWA_FILES = new Set(["/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png", "/icon-app.png"]);
 app.use((req: Request, res: Response, next: NextFunction) => {
   const host = req.headers.host ?? "";
   if (!hostOk(host)) return res.status(403).end();
   // Retorno de OAuth: llega desde accounts.google.com / login.microsoftonline.com, así que no lleva cookie Strict.
   // Se protege con `state` aleatorio de un solo uso + PKCE, no con la cookie.
   if (req.path === "/oauth/callback") return next();
+  // Archivos de la PWA (no sensibles): se sirven sin token para poder instalar la app en el móvil. Los datos y la API siguen protegidos.
+  if (req.method === "GET" && PWA_FILES.has(req.path)) return next();
   const ip = clientIp(req), f = fails.get(ip);
   if (f && Date.now() - f.since > FAIL_WINDOW) fails.delete(ip);
   if (f && f.n >= FAIL_MAX && Date.now() - f.since <= FAIL_WINDOW) return res.status(429).send("Demasiados intentos. Espera unos minutos.");
