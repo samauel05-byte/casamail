@@ -1057,6 +1057,11 @@ console.log("\nModo remoto (app Android): seguridad");
     });
     await t("en local la cookie sigue sin Secure (http://127.0.0.1)", async () => { const c = String((await get(8091, "127.0.0.1", "/?t=" + TOK)).headers["set-cookie"]); ok(/HttpOnly/.test(c) && !/Secure/.test(c), c); });
     await t("sin token ni cookie no se entra, y la API tampoco", async () => { eq((await get(8092, "casa.tail.ts.net", "/")).status, 401); eq((await get(8092, "casa.tail.ts.net", "/api/accounts")).status, 401); });
+    await t("PWA: manifest, service worker e iconos se sirven SIN token (para instalar en el móvil); el resto sigue protegido", async () => {
+      for (const p of ["/manifest.webmanifest", "/sw.js", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"]) eq((await get(8092, "casa.tail.ts.net", p)).status, 200, "público: " + p);
+      eq((await get(8092, "casa.tail.ts.net", "/app.js")).status, 401, "app.js sigue pidiendo token");
+      eq((await get(8092, "casa.tail.ts.net", "/api/accounts")).status, 401, "la API sigue protegida");
+    });
     await t("con la cookie correcta se accede a la API", async () => { eq((await get(8092, "casa.tail.ts.net", "/api/accounts", "cm=" + TOK)).status, 200); });
     await t("un token del mismo largo pero equivocado no entra", async () => { eq((await get(8092, "casa.tail.ts.net", "/?t=" + "b".repeat(48))).status, 401); });
     await t("tras 10 tokens equivocados se bloquea la IP (429), incluso con el token bueno", async () => {

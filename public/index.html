@@ -2,11 +2,17 @@
 <html lang="es" data-theme="auto">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>CasaMail</title>
 <link rel="icon" type="image/png" href="icon-app.png">
-<link rel="apple-touch-icon" href="icon-app.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#04142F">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CasaMail">
 <link rel="stylesheet" href="app.css">
 <script>try{var t=localStorage.getItem('cm-theme');if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
 </head>
@@ -89,5 +95,9 @@
 <script src="firmas.js"></script>
 <script src="crear.js"></script>
 <script src="informar.js"></script>
+<script>/* PWA: registra el service worker salvo en la app nativa de Android (que ya es nativa) */
+if ('serviceWorker' in navigator && !window.CasaNative && location.protocol !== 'file:') {
+  window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+}</script>
 </body>
 </html>
